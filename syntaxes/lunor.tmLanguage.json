@@ -1,0 +1,73 @@
+{
+	"name": "lunor",
+	"scopeName": "source.lunor",
+	"foldingStartMarker": "^\\s*:",
+	"patterns": [
+		{ "include": "#comments" },
+		{ "include": "#directives" },
+		{ "include": "#components" },
+		{ "include": "#props" },
+		{ "include": "#strings" },
+		{ "include": "#numbers" },
+		{ "include": "#listItem" }
+	],
+	"repository": {
+		"comments": {
+			"patterns": [
+				{
+					"name": "comment.line.double-slash.lunor",
+					"match": "//.*$"
+				}
+			]
+		},
+		"directives": {
+			"patterns": [
+				{
+					"name": "keyword.control.lunor",
+					"match": "^\\s*:(data|state|fetch|if|for)\\b"
+				}
+			]
+		},
+		"components": {
+			"patterns": [
+				{
+					"name": "entity.name.tag.lunor",
+					"match": "^\\s*:(\\w+)"
+				}
+			]
+		},
+		"props": {
+			"patterns": [
+				{
+					"name": "variable.parameter.lunor",
+					"match": "(\\w+)(?=\\=)"
+				}
+			]
+		},
+		"strings": {
+			"patterns": [
+				{
+					"name": "string.quoted.double.lunor",
+					"begin": "\"",
+					"end": "\""
+				}
+			]
+		},
+		"numbers": {
+			"patterns": [
+				{
+					"name": "constant.numeric.lunor",
+					"match": "\\b\\d+(?:\\.\\d+)?\\b"
+				}
+			]
+		},
+		"listItem": {
+			"patterns": [
+				{
+					"name": "markup.list.lunor",
+					"match": "^\\s*-\\s+"
+				}
+			]
+		}
+	}
+}

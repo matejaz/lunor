@@ -1,0 +1,17 @@
+Kako rešimo stile? Lahko vnaprej določimo, Tailwind CSS, vnaprej pripravljene teme
+Je treba podpirati komponente ali samo uporabo komponent? Komponente
+Katetere vse funkcionalnosti Reacta podpiramo? Vse te splošne (State, Context, Router, Effect)
+
+--------------------------------
+
+Iz nastavitev parametri - pomožen razred
+
+
+
+
+----
+ideja za aplikacijo - Knjiga receptov
+
+
+KNJIGA RECEPTOV
+Kako hraniti recepte? V podatkovni bazi, imamo dodajanje, brisanje, urejanje v naši aplikaciji ali v file-ih podobno kot so data in posts pri Jeykll

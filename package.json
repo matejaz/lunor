@@ -53,13 +53,25 @@
 				],
 				"extensions": [
 					".lnr"
-				]
+				],
+				"configuration": "./syntaxes/language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "lunor",
+				"scopeName": "source.lunor",
+				"path": "./syntaxes/lunor.tmLanguage.json"
 			}
 		],
 		"commands": [
 			{
 				"command": "lunor.generateReact",
-				"title": "Generate React Component"
+				"title": "Generate React"
+			},
+			{
+				"command": "lunor.processAllFiles",
+				"title": "Process All Files"
 			}
 		]
 	},
@@ -80,5 +92,8 @@
 		"mocha": "^10.3.0",
 		"typescript": "^5.8.2",
 		"typescript-eslint": "^8.26.0"
+	},
+	"dependencies": {
+		"vscode-uri": "^3.1.0"
 	}
 }

@@ -1,0 +1,19 @@
+{
+	"comments": {
+		"blockComment": ["/*", "*/"],
+		"lineComment": "//"
+	},
+	"brackets": [
+		["(", ")"],
+		["[", "]"],
+		["{", "}"]
+	],
+	"autoClosingPairs": [
+		["(", ")"],
+		["[", "]"],
+		["{", "}"]
+	],
+	"folding": {
+		"offSide": true
+	}
+}

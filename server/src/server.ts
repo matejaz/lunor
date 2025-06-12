@@ -14,12 +14,24 @@ import {
 	InitializeResult,
 	DocumentDiagnosticReportKind,
 	type DocumentDiagnosticReport,
-	Position,
+	InsertTextFormat,
+	SignatureHelp,
+	SignatureInformation,
+	ParameterInformation,
+	SignatureHelpParams,
+	DiagnosticSeverity,
+	Diagnostic,
+	CodeAction,
+	CodeActionKind,
 } from "vscode-languageserver/node";
+import { URI } from "vscode-uri";
+import * as fs from "fs";
+import * as path from "path";
+import * as glob from "fast-glob";
+import { TextDocument } from "vscode-languageserver-textdocument";
+import { generateReactCode, parseLunor } from "./parser/lunorParser";
 
-import { TextDocument, TextEdit } from "vscode-languageserver-textdocument";
-import { parseLunor } from "./parser/lunorParser";
-import { generateReactCode } from "./parser/lunorToJsx";
+let workspaceRoots: string[] = [];
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
 const connection = createConnection(ProposedFeatures.all);
@@ -27,9 +39,12 @@ const connection = createConnection(ProposedFeatures.all);
 // Create a simple text document manager.
 const documents = new TextDocuments(TextDocument);
 
+// In‐memory map of component signatures parsed from first line of each Lunor file
+const componentSignatures = new Map<string, SignatureInformation>();
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
-// let hasDiagnosticRelatedInformationCapability = false;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+let hasDiagnosticRelatedInformationCapability = false;
 
 connection.onInitialize((params: InitializeParams) => {
 	const capabilities = params.capabilities;
@@ -42,23 +57,37 @@ connection.onInitialize((params: InitializeParams) => {
 	hasWorkspaceFolderCapability = !!(
 		capabilities.workspace && !!capabilities.workspace.workspaceFolders
 	);
-	// hasDiagnosticRelatedInformationCapability = !!(
-	// 	capabilities.textDocument &&
-	// 	capabilities.textDocument.publishDiagnostics &&
-	// 	capabilities.textDocument.publishDiagnostics.relatedInformation
-	// );
+	hasDiagnosticRelatedInformationCapability = !!(
+		capabilities.textDocument &&
+		capabilities.textDocument.publishDiagnostics &&
+		capabilities.textDocument.publishDiagnostics.relatedInformation
+	);
 
+	if (params.workspaceFolders) {
+		workspaceRoots = params.workspaceFolders.map(
+			(folder) => URI.parse(folder.uri).fsPath
+		);
+	} else if (params.rootUri) {
+		workspaceRoots = [URI.parse(params.rootUri).fsPath];
+	}
 	const result: InitializeResult = {
 		capabilities: {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
 			// Tell the client that this server supports code completion.
 			completionProvider: {
 				resolveProvider: true,
+				triggerCharacters: [":"], // Add trigger character
 			},
 			diagnosticProvider: {
 				interFileDependencies: false,
 				workspaceDiagnostics: false,
 			},
+			hoverProvider: true, // Enable hover provider
+			signatureHelpProvider: {
+				triggerCharacters: ["(", ","],
+			},
+			documentFormattingProvider: true, // Enable document formatting provider
+			codeActionProvider: true,
 		},
 	};
 	if (hasWorkspaceFolderCapability) {
@@ -71,6 +100,73 @@ connection.onInitialize((params: InitializeParams) => {
 	return result;
 });
 
+// Helper: parse first line of a doc for “Tag(param:type, …)” definitions
+function parseComponentDefinition(doc: TextDocument) {
+	const text = doc.getText();
+	const firstLine = text.split(/\r?\n/)[0].trim();
+	const m = /^(\w+)\((.*)\)$/.exec(firstLine);
+	if (!m) {
+		return;
+	}
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	const [_a, tag, paramsRaw] = m;
+	const rawList = paramsRaw
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
+	const parameters = rawList.map((spec) => {
+		// matches name?:type or name:type
+		const parts = /^(\w+)(\?)?:(\w+)$/.exec(spec);
+		const label = parts ? `${parts[1]}${parts[2] || ""}:${parts[3]}` : spec;
+		const docString = parts ? `Type: ${parts[3]}` : "";
+		return ParameterInformation.create(label, docString);
+	});
+	const signature: SignatureInformation = {
+		label: `${tag}(${parameters.map((p) => p.label).join(", ")})`,
+		documentation: `Props for ${tag}`,
+		parameters,
+	};
+	componentSignatures.set(tag, signature);
+}
+
+// Update definitions when Lunor docs open or change
+documents.onDidOpen((e) => parseComponentDefinition(e.document));
+documents.onDidChangeContent((e) => parseComponentDefinition(e.document));
+
+// Provide signature help based on parsed definitions
+connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp => {
+	const doc = documents.get(params.textDocument.uri);
+	if (!doc) {
+		return { signatures: [], activeSignature: 0, activeParameter: 0 };
+	}
+
+	// get text up to cursor, match “:Tag(”
+	const offset = doc.offsetAt(params.position);
+	const pre = doc.getText().slice(0, offset);
+	const m = /:(\w+)\s*\($/.exec(pre);
+	if (!m) {
+		return { signatures: [], activeSignature: 0, activeParameter: 0 };
+	}
+	const tag = m[1];
+	const sigInfo = componentSignatures.get(tag);
+	if (!sigInfo) {
+		return { signatures: [], activeSignature: 0, activeParameter: 0 };
+	}
+
+	// determine active parameter index by counting commas after the “(”
+	const afterParen = pre.split("(").pop() || "";
+	const activeParam = afterParen.split(",").length - 1;
+
+	return {
+		signatures: [sigInfo],
+		activeSignature: 0,
+		activeParameter: Math.max(
+			0,
+			Math.min(activeParam, (sigInfo.parameters?.length ?? 0) - 1)
+		),
+	};
+});
+
 connection.onDidChangeTextDocument(async (change) => {
 	const document = documents.get(change.textDocument.uri);
 	if (!document) {
@@ -80,41 +176,10 @@ connection.onDidChangeTextDocument(async (change) => {
 	const changeEvent = change.contentChanges[0];
 	if (!changeEvent || !("range" in changeEvent)) {
 		return;
-	} // ✅ varno preverjanje
-
-	const startLine = changeEvent.range.start.line;
-	const content = document.getText();
-	const lines = content.split(/\r?\n/);
-	const fullLine = lines[startLine];
-
-	// Preveri, če vrstica vsebuje @ImeKomponente{...}
-	const match = fullLine.trim().match(/^@(\w+)\{.*\}$/);
-	if (!match) {
-		return;
 	}
-
-	// Preveri, če naslednja vrstica že vsebuje @end
-	const nextLine = lines[startLine + 1]?.trim();
-	if (nextLine === "@end") {
-		return;
-	}
-
-	// Vstavi @end v naslednjo vrstico
-	const edit: TextEdit = {
-		range: {
-			start: Position.create(startLine + 1, 0),
-			end: Position.create(startLine + 1, 0),
-		},
-		newText: "@end\n",
-	};
-
-	await connection.workspace.applyEdit({
-		changes: {
-			[change.textDocument.uri]: [edit],
-		},
-	});
 });
 connection.onInitialized(() => {
+	scanAllComponentDefinitions();
 	if (hasConfigurationCapability) {
 		// Register for all configuration changes.
 		connection.client.register(
@@ -128,23 +193,34 @@ connection.onInitialized(() => {
 		});
 	}
 });
-
+function scanAllComponentDefinitions() {
+	for (const root of workspaceRoots) {
+		const pattern = path.join(root, "**/*.lunor").replace(/\\/g, "/");
+		for (const file of glob.sync(pattern, { dot: false })) {
+			try {
+				const text = fs.readFileSync(file, "utf8");
+				const fakeDoc = TextDocument.create(
+					URI.file(file).toString(),
+					"lunor",
+					0,
+					text
+				);
+				parseComponentDefinition(fakeDoc);
+			} catch {
+				// ignore
+			}
+		}
+	}
+}
 // The example settings
 interface ExampleSettings {
 	maxNumberOfProblems: number;
 }
 
-// The global settings, used when the `workspace/configuration` request is not supported by the client.
-// Please note that this is not the case when using this server with the client provided in this example
-// but could happen with other clients.
-// const defaultSettings: ExampleSettings = { maxNumberOfProblems: 1000 };
-// let globalSettings: ExampleSettings = defaultSettings;
-
 // Cache the settings of all open documents
 const documentSettings = new Map<string, Thenable<ExampleSettings>>();
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-connection.onDidChangeConfiguration((change) => {
+connection.onDidChangeConfiguration((_change) => {
 	if (hasConfigurationCapability) {
 		// Reset all cached document settings
 		documentSettings.clear();
@@ -158,110 +234,267 @@ connection.onDidChangeConfiguration((change) => {
 	connection.languages.diagnostics.refresh();
 });
 
-// function getDocumentSettings(resource: string): Thenable<ExampleSettings> {
-// 	if (!hasConfigurationCapability) {
-// 		return Promise.resolve(globalSettings);
-// 	}
-// 	let result = documentSettings.get(resource);
-// 	if (!result) {
-// 		result = connection.workspace.getConfiguration({
-// 			scopeUri: resource,
-// 			section: "languageServerExample",
-// 		});
-// 		documentSettings.set(resource, result);
-// 	}
-// 	return result;
-// }
-
 // Only keep settings for open documents
 documents.onDidClose((e) => {
 	documentSettings.delete(e.document.uri);
 });
 
+// Replace your diagnostics handler with this:
 connection.languages.diagnostics.on(async (params) => {
 	const document = documents.get(params.textDocument.uri);
-	if (document !== undefined) {
-		return {
-			kind: DocumentDiagnosticReportKind.Full,
-			// items: await validateDocument(document),
-			items: [],
-		} satisfies DocumentDiagnosticReport;
-	} else {
-		// We don't know the document. We can either try to read it from disk
-		// or we don't report problems for it.
+	if (!document) {
 		return {
 			kind: DocumentDiagnosticReportKind.Full,
 			items: [],
 		} satisfies DocumentDiagnosticReport;
 	}
+
+	const { diagnostics } = parseLunor(document.getText());
+
+	// const items = validateDocument(document);
+	const items: Diagnostic[] = diagnostics.map(
+		(diag): Diagnostic => ({
+			severity: diag.severity as DiagnosticSeverity,
+			range: diag.range,
+			message: diag.message,
+			source: "lunor",
+			code: diag.code, // Include code if available
+		})
+	);
+	return {
+		kind: DocumentDiagnosticReportKind.Full,
+		items,
+	} satisfies DocumentDiagnosticReport;
 });
 
-// The content of a text document has changed. This event is emitted
-// when the text document first opened or when its content has changed.
-// documents.onDidChangeContent((change) => {
-// 	// validateDocument(change.document);
-// });
-
-connection.onRequest("lunor/generateReact", async ({ text }) => {
+connection.onRequest("lunor/generateReact", async (params) => {
 	try {
 		// Parsiraj besedilo in ga pretvori v JSX
-		const { ast, diagnostics } = parseLunor(text);
-		const jsx = generateReactCode(ast);
+		console.log("Pretvarjanje Lunor v React JSX ...");
+		const { ast, diagnostics, component } = parseLunor(params.text);
+		const jsx = generateReactCode(ast, component);
 		console.log("Problems:", diagnostics);
-		return jsx; // Pošlji JSX nazaj klientu
+		console.log(ast);
+		console.log(component);
+
+		if (diagnostics.length > 0) {
+			connection.sendDiagnostics({
+				uri: params.textDocument.uri,
+				diagnostics: diagnostics.map(
+					(diag): Diagnostic => ({
+						severity: diag.severity as DiagnosticSeverity,
+						range: diag.range,
+						message: diag.message,
+						source: "lunor",
+						code: diag.code,
+					})
+				),
+			});
+		}
+
+		// Vrni JSX kodo kot rezultat
+		return jsx;
 	} catch (err) {
 		// Poskrbi za napake pri parserju
 		connection.console.error(`Napaka pri pretvorbi Lunor v React: ${err}`);
-		return "// Napaka pri pretvorbi"; // Vrni napako, če se nekaj zgodi
+		return "// Napaka pri pretvorbi";
 	}
 });
 
-connection.onDidChangeWatchedFiles((_change) => {
-	// Monitored files have change in VSCode
-	connection.console.log("We received a file change event");
+connection.onDidChangeWatchedFiles((ev) => {
+	for (const change of ev.changes) {
+		const uri = URI.parse(change.uri);
+		if (!uri.fsPath.endsWith(".lunor")) {
+			continue;
+		}
+
+		if (
+			change.type === 1 /* Created */ ||
+			change.type === 2 /* Changed */
+		) {
+			try {
+				const text = fs.readFileSync(uri.fsPath, "utf8");
+				const doc = TextDocument.create(change.uri, "lunor", 0, text);
+				parseComponentDefinition(doc);
+			} catch {
+				/* ignore */
+			}
+		} else if (change.type === 3 /* Deleted */) {
+			// remove any signature for that file's first‐line tag
+			// easiest: clear the entire map and rescan
+
+			componentSignatures.clear();
+			scanAllComponentDefinitions();
+		}
+	}
+});
+
+connection.onCodeAction((params) => {
+	const actions: CodeAction[] = [];
+
+	for (const diag of params.context.diagnostics) {
+		if (diag.code === "InvalidProperty") {
+			const fix: CodeAction = {
+				title: "Remove Invalid Property",
+				kind: CodeActionKind.QuickFix,
+				diagnostics: [diag],
+				edit: {
+					changes: {
+						[params.textDocument.uri]: [
+							{
+								range: diag.range,
+								newText: "", // Remove the invalid property
+							},
+						],
+					},
+				},
+			};
+			actions.push(fix);
+		}
+		if (diag.code === "InvalidDataValue") {
+			const fix: CodeAction = {
+				title: "Remove Invalid Data Value",
+				kind: CodeActionKind.QuickFix,
+				diagnostics: [diag],
+				edit: {
+					changes: {
+						[params.textDocument.uri]: [
+							{
+								range: diag.range,
+								newText: "", // Remove the invalid data value
+							},
+						],
+					},
+				},
+			};
+			actions.push(fix);
+		}
+	}
+	return actions;
 });
 
 // This handler provides the initial list of the completion items.
-connection.onCompletion((textDocumentPosition) => {
+connection.onCompletion((textDocumentPosition): CompletionItem[] => {
 	const document = documents.get(textDocumentPosition.textDocument.uri);
 	if (!document) {
 		return [];
 	}
 
+	const items: CompletionItem[] = [];
 	const text = document.getText();
-	const lines = text.split(/\r?\n/);
-	const { line } = textDocumentPosition.position;
-	const currentLine = lines[line].trim();
+	const position = textDocumentPosition.position;
+	const lineContent = text.split(/\r?\n/)[position.line];
 
-	// Če vrstica izgleda kot @Komponenta{...}
-	const match = currentLine.match(/^@(\w+)\{.*\}$/);
-	if (!match) {
-		return [];
+	// New component completion logic
+	// Check character before cursor, or use context if available
+	const charBeforeCursor = lineContent.substring(
+		position.character - 1,
+		position.character
+	);
+	if (charBeforeCursor === ":") {
+		const componentSuggestions: CompletionItem[] =
+			getAllComponentTags().map((tag) => ({
+				label: `:${tag}`,
+				kind: CompletionItemKind.Class,
+				insertText: `${tag}{\n\t$0\n}`, // Snippet for component
+				insertTextFormat: InsertTextFormat.Snippet,
+				detail: `A ${tag} component.`,
+				data: tag, // Use tag as data for later resolution
+			}));
+
+		items.push(...componentSuggestions);
+
+		// add if, for, data, state and fetch suggestions
+		const controlFlowSuggestions: CompletionItem[] = [
+			{
+				label: ":if",
+				kind: CompletionItemKind.Function,
+				insertText: "if condition \n\t$0\n",
+				insertTextFormat: InsertTextFormat.Snippet,
+				detail: "If statement",
+				data: "if",
+			},
+			{
+				label: ":for",
+				kind: CompletionItemKind.Function,
+				insertText: "for item in items \n\t$0\n",
+				insertTextFormat: InsertTextFormat.Snippet,
+				detail: "For loop",
+				data: "for",
+			},
+			{
+				label: ":data",
+				kind: CompletionItemKind.Variable,
+				insertText: "data key=value $0\n",
+				insertTextFormat: InsertTextFormat.Snippet,
+				detail: "Data binding",
+				data: "data",
+			},
+			{
+				label: ":state",
+				kind: CompletionItemKind.Variable,
+				insertText: "state key=value $0\n",
+				insertTextFormat: InsertTextFormat.Snippet,
+				detail: "State management",
+				data: "state",
+			},
+			{
+				label: ":fetch",
+				kind: CompletionItemKind.Variable,
+				insertText: "fetch $0 from '$1'",
+				insertTextFormat: InsertTextFormat.Snippet,
+				detail: "Fetch data",
+				data: "fetch",
+			},
+		];
+		items.push(...controlFlowSuggestions);
 	}
 
-	return [
-		{
-			label: "@end",
-			kind: CompletionItemKind.Snippet,
-			insertText: "@end",
-			detail: `Samodejno zapri komponento "${match[1]}"`,
-		},
-	];
+	return items;
 });
 
 // This handler resolves additional information for the item selected in
-// the completion list.
 connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
-	if (item.data === 1) {
-		item.detail = "@Card details";
-		item.documentation = "@Card documentation";
-	} else if (item.data === 2) {
-		item.detail = "JavaScript details";
-		item.documentation = "JavaScript documentation";
-	}
+	// Resolve additional information for the completion item
+	const allComponentSignatures = getAllComponentSignatures();
+
+	allComponentSignatures.forEach((sig) => {
+		if (item.data === sig.label) {
+			item.detail = "" + sig.label + " details";
+			item.documentation = "" + sig.documentation;
+			return;
+		}
+	});
+
 	return item;
 });
 
+connection.onHover(({ textDocument }) => {
+	// Get the document
+	const doc = documents.get(textDocument.uri);
+	if (!doc) {
+		return undefined;
+	}
+
+	// For now, let's return a static hover message.
+	// You can implement logic here to determine what to show based on the position.
+	// For example, inspect the word at the current position.
+	return {
+		contents: {
+			kind: "markdown",
+			value: "Hello from Lunor Language Server! You hovered here.",
+		},
+	};
+});
+
+function getAllComponentTags(): string[] {
+	// Return all component tags from the signatures
+	return Array.from(componentSignatures.keys());
+}
+
+function getAllComponentSignatures(): SignatureInformation[] {
+	return Array.from(componentSignatures.values());
+}
 // Make the text document manager listen on the connection
 // for open, change and close text document events
 documents.listen(connection);
