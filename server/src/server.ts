@@ -31,8 +31,7 @@ import * as glob from "fast-glob";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { generateReactCode, parseLunor } from "./parser/lunorParser";
 
-let workspaceRoots: string[] = [];
-// Create a connection for the server, using Node's IPC as a transport.
+let workspaceRoot = ""; // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
 const connection = createConnection(ProposedFeatures.all);
 
@@ -41,62 +40,47 @@ const documents = new TextDocuments(TextDocument);
 
 // In‐memory map of component signatures parsed from first line of each Lunor file
 const componentSignatures = new Map<string, SignatureInformation>();
-let hasConfigurationCapability = false;
-let hasWorkspaceFolderCapability = false;
+const hasConfigurationCapability = false;
+const hasWorkspaceFolderCapability = false;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-let hasDiagnosticRelatedInformationCapability = false;
+const hasDiagnosticRelatedInformationCapability = false;
 
 connection.onInitialize((params: InitializeParams) => {
-	const capabilities = params.capabilities;
-
-	// Does the client support the `workspace/configuration` request?
-	// If not, we fall back using global settings.
-	hasConfigurationCapability = !!(
-		capabilities.workspace && !!capabilities.workspace.configuration
-	);
-	hasWorkspaceFolderCapability = !!(
-		capabilities.workspace && !!capabilities.workspace.workspaceFolders
-	);
-	hasDiagnosticRelatedInformationCapability = !!(
-		capabilities.textDocument &&
-		capabilities.textDocument.publishDiagnostics &&
-		capabilities.textDocument.publishDiagnostics.relatedInformation
-	);
-
+	// pick the “lunor” folder if there are multiple roots,
+	// else just take the single one
 	if (params.workspaceFolders) {
-		workspaceRoots = params.workspaceFolders.map(
-			(folder) => URI.parse(folder.uri).fsPath
+		const roots = params.workspaceFolders.map(
+			(f) => URI.parse(f.uri).fsPath
 		);
+		workspaceRoot =
+			roots.find((r) => path.basename(r).toLowerCase() === "lunor") ||
+			roots[0];
 	} else if (params.rootUri) {
-		workspaceRoots = [URI.parse(params.rootUri).fsPath];
+		workspaceRoot = URI.parse(params.rootUri).fsPath;
 	}
+	// If there's a 'lunor' subfolder under the root, use that for scanning
+	const lunorSubdir = path.join(workspaceRoot, "lunor");
+	if (fs.existsSync(lunorSubdir) && fs.statSync(lunorSubdir).isDirectory()) {
+		workspaceRoot = lunorSubdir;
+	}
+
 	const result: InitializeResult = {
 		capabilities: {
 			textDocumentSync: TextDocumentSyncKind.Incremental,
-			// Tell the client that this server supports code completion.
 			completionProvider: {
 				resolveProvider: true,
-				triggerCharacters: [":"], // Add trigger character
+				triggerCharacters: [":"],
 			},
+			hoverProvider: true,
+			signatureHelpProvider: { triggerCharacters: ["(", ","] },
+			documentFormattingProvider: true,
+			codeActionProvider: true,
 			diagnosticProvider: {
 				interFileDependencies: false,
 				workspaceDiagnostics: false,
 			},
-			hoverProvider: true, // Enable hover provider
-			signatureHelpProvider: {
-				triggerCharacters: ["(", ","],
-			},
-			documentFormattingProvider: true, // Enable document formatting provider
-			codeActionProvider: true,
 		},
 	};
-	if (hasWorkspaceFolderCapability) {
-		result.capabilities.workspace = {
-			workspaceFolders: {
-				supported: true,
-			},
-		};
-	}
 	return result;
 });
 
@@ -194,24 +178,26 @@ connection.onInitialized(() => {
 	}
 });
 function scanAllComponentDefinitions() {
-	for (const root of workspaceRoots) {
-		const pattern = path.join(root, "**/*.lunor").replace(/\\/g, "/");
-		for (const file of glob.sync(pattern, { dot: false })) {
-			try {
-				const text = fs.readFileSync(file, "utf8");
-				const fakeDoc = TextDocument.create(
-					URI.file(file).toString(),
-					"lunor",
-					0,
-					text
-				);
-				parseComponentDefinition(fakeDoc);
-			} catch {
-				// ignore
-			}
+	if (!workspaceRoot) {
+		return;
+	}
+	const pattern = path.join(workspaceRoot, "**/*.lunor").replace(/\\/g, "/");
+	for (const file of glob.sync(pattern, { dot: false })) {
+		try {
+			const text = fs.readFileSync(file, "utf8");
+			const fakeDoc = TextDocument.create(
+				URI.file(file).toString(),
+				"lunor",
+				0,
+				text
+			);
+			parseComponentDefinition(fakeDoc);
+		} catch {
+			// ignore
 		}
 	}
 }
+
 // The example settings
 interface ExampleSettings {
 	maxNumberOfProblems: number;
@@ -272,7 +258,7 @@ connection.onRequest("lunor/generateReact", async (params) => {
 		// Parsiraj besedilo in ga pretvori v JSX
 		console.log("Pretvarjanje Lunor v React JSX ...");
 		const { ast, diagnostics, component } = parseLunor(params.text);
-		const jsx = generateReactCode(ast, component);
+		const jsx = generateReactCode(ast, component, workspaceRoot);
 		console.log("Problems:", diagnostics);
 		console.log(ast);
 		console.log(component);
@@ -304,7 +290,7 @@ connection.onRequest("lunor/generateReact", async (params) => {
 connection.onDidChangeWatchedFiles((ev) => {
 	for (const change of ev.changes) {
 		const uri = URI.parse(change.uri);
-		if (!uri.fsPath.endsWith(".lunor")) {
+		if (!uri.fsPath.endsWith(".lnr")) {
 			continue;
 		}
 
@@ -385,8 +371,6 @@ connection.onCompletion((textDocumentPosition): CompletionItem[] => {
 	const position = textDocumentPosition.position;
 	const lineContent = text.split(/\r?\n/)[position.line];
 
-	// New component completion logic
-	// Check character before cursor, or use context if available
 	const charBeforeCursor = lineContent.substring(
 		position.character - 1,
 		position.character

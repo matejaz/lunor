@@ -1,3 +1,6 @@
+import * as path from "path";
+import * as fs from "fs";
+import * as glob from "fast-glob";
 import { DiagnosticSeverity } from "vscode-languageserver";
 
 interface AstNode {
@@ -57,6 +60,7 @@ interface FetchNode extends AstNode {
 	body?: string;
 	headers?: Record<string, string>;
 	variable?: string;
+	initVariable?: string;
 }
 
 interface ExpressionNode extends AstNode {
@@ -98,7 +102,7 @@ interface ParseContext {
 
 interface ParentComponent {
 	name: string;
-	props: Record<string, string | number | boolean | AstNode>;
+	props?: { name: string; type: string; optional?: boolean }[];
 }
 
 function parseData(
@@ -338,15 +342,19 @@ function parseDirective(line: string, context: ParseContext): AstNode | null {
 	}
 
 	if (trimmedLine.match(context.fetchRegex)) {
-		const [, variable, url, method] = trimmedLine.match(
+		const [, variable, initVariable, url, method] = trimmedLine.match(
 			context.fetchRegex
 		)!;
+		console.log(
+			`Parsing fetch directive: variable=${variable}, initVariable=${initVariable}, url=${url}, method=${method}`
+		);
 		const fetchNode: FetchNode = {
 			type: "Fetch",
 			url: url.trim(),
 			method: method ? method.toUpperCase().trim() : "GET",
 			headers: {},
 			variable: variable.trim(),
+			initVariable: initVariable,
 		};
 		if (url) {
 			const fromMatch = variable.match(context.exprRegex);
@@ -454,7 +462,8 @@ export function parseLunor(text: string): {
 		dataRegex: /^:data\s+(\w+)=(.+)$/,
 		forRegex: /^:(?:for|forEach)\s+(\w+)\s+in\s+([\w.]+)$/,
 		ifRegex: /^:if\s+(.+)$/,
-		fetchRegex: /^:fetch\s+(.+)from\s+(.+)\s(GET|PUT|POST|DELETE{1})$/,
+		fetchRegex:
+			/^:fetch\s+(\w+)\s*\(\s*(\{[^}]*\}\[\])\s*\)\s+from\s+"([^"]+)"\s+(GET|POST|PUT|DELETE)\s*$/,
 		propRegex: /^(\w+):(.+)$/,
 		exprRegex: /\{(.+?)\}/,
 	};
@@ -481,29 +490,70 @@ export function parseLunor(text: string): {
 			continue;
 		}
 
-		// Prva vrstica je vedno komponenta
+		// First line defines component name and props
 		if (context.currentLine === 0) {
-			const name = line.trim();
-			if (!name.match(/^(\w+)\(([^)]*)\)$/)) {
+			const firstLine = line.trim();
+			const m = /^(\w+)\(([^)]*)\)$/.exec(firstLine);
+			if (!m) {
 				context.diagnostics.push({
-					message: `Neveljavno ime komponente: ${name}`,
+					message: `Invalid component signature: ${firstLine}`,
 					line: context.currentLine + 1,
 					severity: DiagnosticSeverity.Error,
 					range: {
 						start: { line: context.currentLine, character: 0 },
 						end: {
 							line: context.currentLine,
-							character: line.length,
+							character: firstLine.length,
 						},
 					},
-					code: "InvalidComponentName",
+					code: "InvalidComponentSignature",
 				});
+				context.parentComponent = { name: firstLine };
+			} else {
+				const tag = m[1];
+				const paramsRaw = m[2];
+				const rawList = paramsRaw
+					.split(",")
+					.map((s) => s.trim())
+					.filter(Boolean);
+				const props: {
+					name: string;
+					type: string;
+					optional?: boolean;
+				}[] = [];
+				for (const spec of rawList) {
+					const parts = /^(\w+)(\?)?:(\w+(\[\])*)$/.exec(spec);
+					if (parts) {
+						const propName = parts[1];
+						const optional = parts[2] || "";
+						const type = parts[3];
+						props.push({
+							name: propName,
+							type,
+							optional: !!optional,
+						});
+					} else {
+						const charIndex = line.indexOf(spec);
+						context.diagnostics.push({
+							message: `Invalid prop definition: ${spec}`,
+							line: context.currentLine + 1,
+							severity: DiagnosticSeverity.Error,
+							range: {
+								start: {
+									line: context.currentLine,
+									character: charIndex,
+								},
+								end: {
+									line: context.currentLine,
+									character: charIndex + spec.length,
+								},
+							},
+							code: "InvalidPropDefinition",
+						});
+					}
+				}
+				context.parentComponent = { name: tag, props };
 			}
-
-			context.parentComponent = {
-				name,
-				props: {},
-			};
 		} else {
 			parseLine(line, context);
 		}
@@ -574,38 +624,8 @@ function generateMarkdownNode(
 function generateComponentNode(
 	node: ComponentNode,
 	level: number,
-	indentFn: (n: number) => string,
-	declarations: string[],
-	imports: string[]
+	indentFn: (n: number) => string
 ): string {
-	let styleCode = "";
-	if (node.styles) {
-		styleCode = ` style={${JSON.stringify(node.styles)}}`;
-	}
-	if (node.hoverStyles && Object.keys(node.hoverStyles).length > 0) {
-		const hoverVar = `isHovered${node.name}${Math.random()
-			.toString(36)
-			.slice(2, 8)}`;
-		declarations.push(
-			`const [${hoverVar}, set${
-				hoverVar.charAt(0).toUpperCase() + hoverVar.slice(1)
-			}] = useState(false);`
-		);
-		if (!imports.includes("useState")) {
-			imports.push("useState");
-		}
-		styleCode =
-			` style={${hoverVar} ? ${JSON.stringify(node.hoverStyles)} : ${
-				node.styles ? JSON.stringify(node.styles) : "{}"
-			}}` +
-			` onMouseOver={() => set${
-				hoverVar.charAt(0).toUpperCase() + hoverVar.slice(1)
-			}(true)}` +
-			` onMouseOut={() => set${
-				hoverVar.charAt(0).toUpperCase() + hoverVar.slice(1)
-			}(false)}`;
-	}
-
 	const propsStr = Object.entries(node.props)
 		.map(([key, value]) => {
 			if (
@@ -630,11 +650,9 @@ function generateComponentNode(
 	if (childrenCode) {
 		return `${indentFn(level)}<${
 			node.name
-		} ${propsStr}${styleCode}>\n${childrenCode}\n${indentFn(level)}</${
-			node.name
-		}>`;
+		} ${propsStr}>\n${childrenCode}\n${indentFn(level)}</${node.name}>`;
 	}
-	return `${indentFn(level)}<${node.name} ${propsStr}${styleCode} />`;
+	return `${indentFn(level)}<${node.name} ${propsStr}/>`;
 }
 
 function generateDataNode(node: DataNode, declarations: string[]): string {
@@ -668,10 +686,10 @@ function generateFetchNode(
 	}
 
 	const fetchCode = `fetch(${node.url}, {
-  method: '${node.method || "GET"}',
-  headers: ${JSON.stringify(node.headers || {})},
-  body: ${node.body ? JSON.stringify(node.body) : "null"}
-})`;
+  		method: '${node.method || "GET"}',
+  		headers: ${JSON.stringify(node.headers || {})},
+  		body: ${node.body ? JSON.stringify(node.body) : "null"}
+		})`;
 	if (!imports.includes("useEffect")) {
 		imports.push("useEffect");
 	}
@@ -679,14 +697,14 @@ function generateFetchNode(
 		imports.push("useState");
 	}
 	declarations.push(
-		`const [${node.variable}, set${node.variable}] = useState();`
+		`const [${node.variable}, set${node.variable}] = useState(${node.initVariable});`
 	);
 	declarations.push(
 		`useEffect(() => {
-		  ${fetchCode}
-	.then(response => response.json())
-	.then(data => set${node.variable}(data))
-	.catch(error => console.error('Fetch error:', error));
+		${fetchCode}
+		.then(response => response.json())
+		.then(data => set${node.variable}(data))
+		.catch(error => console.error('Fetch error:', error));
 	}, []);`
 	);
 	return "";
@@ -701,12 +719,10 @@ function generateForNode(
 		.map((child) => generateNode(child, level + 1, indentFn))
 		.join("\n");
 	return `${indentFn(level)}{${node.collection}.map((${node.variable}, i) => (
-    <div key={i} title={${node.variable}.title} description={${
-		node.variable
-	}.description} image={${node.variable}.image} link={${node.variable}.link}>
+	<>
       ${childrenCode}
-    </div>
-  ${indentFn(level)})}`;
+  ${indentFn(level)}
+  </>))}`;
 }
 
 function generateIfNode(
@@ -744,9 +760,7 @@ function generateNode(
 			return generateComponentNode(
 				node as ComponentNode,
 				level,
-				indentFn,
-				declarations,
-				imports
+				indentFn
 			);
 		case "Fetch":
 			return generateFetchNode(node as FetchNode, declarations, imports);
@@ -774,33 +788,107 @@ function generateNode(
 	}
 }
 
+function discoverComponentFiles(workspaceRoot: string): Record<string, string> {
+	const map: Record<string, string> = {};
+	// scan every .lnr under the root
+	const pattern = path.join(workspaceRoot, "**/*.lnr").replace(/\\/g, "/");
+	for (const abs of glob.sync(pattern, { dot: false })) {
+		try {
+			const firstLine = fs
+				.readFileSync(abs, "utf8")
+				.split(/\r?\n/)[0]
+				.trim();
+			const m = /^(\w+)\(/.exec(firstLine);
+			if (m) {
+				// compute path *relative* to workspaceRoot and drop extension
+				const rel = path
+					.relative(workspaceRoot, abs)
+					.replace(/\\/g, "/")
+					.replace(/\.lnr$/, "");
+				map[m[1]] = rel;
+			}
+		} catch {
+			// ignore unreadable files
+		}
+	}
+	return map;
+}
 export function generateReactCode(
 	ast: AstNode[],
-	component: ParentComponent | null
+	component: ParentComponent | null,
+	workspaceRoot: string // pass in from your server
 ): string {
 	const imports: string[] = [];
 	const declarations: string[] = [];
 
-	function indent(level: number): string {
-		return " ".repeat(level * 2);
+	// 1) collect every component tag used in the AST
+	const used = new Set<string>();
+	function collect(n: AstNode) {
+		if (n.type === "Component") {
+			used.add((n as ComponentNode).name);
+		}
+		n.children?.forEach(collect);
 	}
+	ast.forEach(collect);
 
-	const bodyCode = ast
-		.map((node) => generateNode(node, 3, indent, declarations, imports))
+	// 2) build map of tag → relative .lnr path
+	const lunorMap = discoverComponentFiles(workspaceRoot);
+
+	const importStmts = Array.from(used)
+		.map((tag) => {
+			const rel = lunorMap[tag];
+			if (rel) {
+				// Use the relative path exactly as discovered to mirror folder structure
+				return `import ${tag} from './${rel}';`;
+			}
+			return `import ${tag} from './${tag}';`;
+		})
+		.join("\n");
+	function indent(l: number) {
+		return "  ".repeat(l);
+	}
+	const body = ast
+		.map((n) => generateNode(n, 2, indent, declarations, imports))
 		.filter(Boolean)
 		.join("\n");
-	const importStatement =
-		imports.length > 0
-			? `import { ${imports.join(", ")} } from 'react';\n`
-			: "";
-	const declarationStatement =
-		declarations.length > 0 ? declarations.join("\n") + "\n\n" : "";
+	const hookImport = imports.length
+		? `import { ${imports.join(", ")} } from 'react';\n`
+		: "";
+	const decls = declarations.length
+		? declarations.map((d) => indent(1) + d).join("\n") + "\n"
+		: "";
 
-	return `${importStatement}export default function ${component?.name} {
-  ${declarationStatement}  return (
-    <>
-      ${bodyCode}
-    </>
+	const propsType = `type ${component?.name}Props = {
+		${(component?.props ?? [])
+			.map(({ name, type, optional }) => {
+				name = name.replace(/[^a-zA-Z0-9_]/g, "_");
+				if (typeof type === "string") {
+					return `${name}${optional ? "?" : ""}: string;`;
+				} else if (typeof type === "number") {
+					return `${name}${optional ? "?" : ""}: number;`;
+				} else if (typeof type === "boolean") {
+					return `${name}${optional ? "?" : ""}: boolean;`;
+				} else {
+					return `${name}${optional ? "?" : ""}: any;`; // Fallback for complex types
+				}
+			})
+			.join("\n")}
+};\n`;
+
+	const props = (component?.props ?? []).map(({ name }) => {
+		return `${name}`;
+	});
+	return `// AUTO-GENERATED by LunorParser
+${importStmts}
+${hookImport}
+${propsType ? propsType : ""}
+export default function ${component?.name || "App"}({${props}}: ${
+		component?.name
+	}Props) {
+${decls}  return (
+	<>
+${body}
+	</>
   );
 }
 `;

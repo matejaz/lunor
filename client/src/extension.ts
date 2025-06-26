@@ -87,7 +87,7 @@ export function activate(context: ExtensionContext) {
 			// Notify the server about file changes to '.clientrc files contained in the workspace
 			fileEvents: [
 				workspace.createFileSystemWatcher("**/.clientrc"),
-				workspace.createFileSystemWatcher("**/*.lunor"),
+				workspace.createFileSystemWatcher("**/*.lnr"),
 			],
 		},
 	};
@@ -244,12 +244,7 @@ export function activate(context: ExtensionContext) {
 				);
 				const parsed = path.parse(relativePath);
 
-				const outputDir = path.join(
-					projectRoot,
-					"src",
-					"pages",
-					parsed.dir
-				);
+				const outputDir = path.join(projectRoot, "src", parsed.dir);
 				const outputFile = path.join(outputDir, parsed.name + ".tsx");
 
 				if (!fs.existsSync(outputDir)) {
@@ -314,12 +309,7 @@ export function activate(context: ExtensionContext) {
 			);
 			const parsed = path.parse(relativePath);
 
-			const outputDir = path.join(
-				projectRoot,
-				"src",
-				"pages",
-				parsed.dir
-			);
+			const outputDir = path.join(projectRoot, "src", parsed.dir);
 			const outputFile = path.join(outputDir, parsed.name + ".tsx");
 
 			if (!fs.existsSync(outputDir)) {
