@@ -16,14 +16,11 @@
 	"engines": {
 		"vscode": "^1.75.0"
 	},
-	"activationEvents": [
-		"onLanguage:lunor"
-	],
 	"main": "./client/out/extension",
 	"contributes": {
 		"configuration": {
 			"type": "object",
-			"title": "Example configuration",
+			"title": "Lunor configuration",
 			"properties": {
 				"languageServerExample.maxNumberOfProblems": {
 					"scope": "resource",

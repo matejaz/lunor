@@ -134,6 +134,28 @@ export function activate(context: ExtensionContext) {
 		)
 	);
 
+	// // on save
+	// context.subscriptions.push(
+	// 	workspace.onDidSaveTextDocument((document) => {
+	// 		if (document.languageId === "lunor") {
+	// 			const params = {
+	// 				textDocument: { uri: document.uri.toString() },
+	// 			};
+	// 			client
+	// 				.sendRequest("textDocument/didSave", params)
+	// 				.catch((err) => {
+	// 					console.error(
+	// 						`Error while saving document ${document.uri.toString()}:`,
+	// 						err
+	// 					);
+	// 					window.showErrorMessage(
+	// 						`Napaka pri shranjevanju dokumenta: ${document.uri.toString()}`
+	// 					);
+	// 				});
+	// 		}
+	// 	})
+	// );
+
 	context.subscriptions.push(
 		languages.registerSignatureHelpProvider(
 			"lunor",
@@ -159,26 +181,6 @@ export function activate(context: ExtensionContext) {
 			"," // trigger on "(" and on comma between parameters
 		)
 	);
-	// context.subscriptions.push(
-	// 	languages.registerDocumentHighlightProvider("lunor", {
-	// 		async provideDocumentHighlights(
-	// 			document: TextDocument,
-	// 			position: Position,
-	// 			token: CancellationToken
-	// 		) {
-	// 			const params = {
-	// 				textDocument: { uri: document.uri.toString() },
-	// 				position,
-	// 			};
-	// 			return client.sendRequest<DocumentHighlight[]>(
-	// 				"textDocument/documentHighlight",
-	// 				params,
-	// 				token
-	// 			);
-	// 		},
-	// 	})
-
-	// );
 
 	context.subscriptions.push(
 		commands.registerCommand("lunor.processAllFiles", async () => {

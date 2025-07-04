@@ -12,14 +12,6 @@
 		{ "include": "#listItem" }
 	],
 	"repository": {
-		"comments": {
-			"patterns": [
-				{
-					"name": "comment.line.double-slash.lunor",
-					"match": "//.*$"
-				}
-			]
-		},
 		"directives": {
 			"patterns": [
 				{
@@ -66,6 +58,14 @@
 				{
 					"name": "markup.list.lunor",
 					"match": "^\\s*-\\s+"
+				}
+			]
+		},
+		"comments": {
+			"patterns": [
+				{
+					"name": "comment.line.double-slash.lunor",
+					"match": "//.*$"
 				}
 			]
 		}

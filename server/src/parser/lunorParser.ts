@@ -2,123 +2,76 @@ import * as path from "path";
 import * as fs from "fs";
 import * as glob from "fast-glob";
 import { DiagnosticSeverity } from "vscode-languageserver";
-
-interface AstNode {
-	type: string;
-	children?: AstNode[];
-	value?: string | number | boolean | AstNode;
-	tag?: string;
-	attributes?: Record<string, string | AstNode>;
-}
-
-interface MarkdownNode extends AstNode {
-	type: "Markdown";
-	tag: string;
-	value?: string | AstNode;
-	children?: AstNode[];
-	attributes?: Record<string, string | AstNode>;
-}
-
-interface ComponentNode extends AstNode {
-	type: "Component";
-	name: string;
-	props: Record<string, string | number | boolean | AstNode>;
-	children: AstNode[];
-	styles?: Record<string, string>;
-	hoverStyles?: Record<string, string>;
-}
-
-interface DataNode extends AstNode {
-	type: "Data";
-	name: string;
-	value: string | number | boolean | AstNode;
-}
-
-interface StateNode extends AstNode {
-	type: "State";
-	name: string;
-	value: string | number | boolean | AstNode;
-}
-
-interface ForNode extends AstNode {
-	type: "For";
-	variable: string;
-	collection: string;
-	children: AstNode[];
-}
-
-interface IfNode extends AstNode {
-	type: "If";
-	condition: string;
-	children: AstNode[];
-}
-
-interface FetchNode extends AstNode {
-	type: "Fetch";
-	url: string;
-	method?: string;
-	body?: string;
-	headers?: Record<string, string>;
-	variable?: string;
-	initVariable?: string;
-}
-
-interface ExpressionNode extends AstNode {
-	type: "Expression";
-	value: string;
-}
-
-interface Diagnostic {
-	message: string;
-	line: number;
-	severity: number;
-	range: {
-		start: { line: number; character: number };
-		end: { line: number; character: number };
-	};
-	code?: string; // Optional code for diagnostics
-}
-
-interface ParseContext {
-	lines: string[];
-	diagnostics: Diagnostic[];
-	stack: { node: AstNode; indent: number }[];
-	ast: AstNode[];
-	parentComponent: ParentComponent | null;
-	currentLine: number;
-	componentName?: string;
-	markdownHeaderRegex: RegExp;
-	markdownListRegex: RegExp;
-	markdownLinkRegex: RegExp;
-	markdownImageRegex: RegExp;
-	componentRegex: RegExp;
-	dataRegex: RegExp;
-	forRegex: RegExp;
-	ifRegex: RegExp;
-	fetchRegex: RegExp;
-	propRegex: RegExp;
-	exprRegex: RegExp;
-}
-
-interface ParentComponent {
-	name: string;
-	props?: { name: string; type: string; optional?: boolean }[];
-}
-
+import {
+	ParseContext,
+	AstNode,
+	DataNode,
+	StateNode,
+	MarkdownNode,
+	ComponentNode,
+	ExpressionNode,
+	FetchNode,
+	ForNode,
+	IfNode,
+	ParentComponent,
+	FunctionNode,
+} from "./types";
 function parseData(
 	line: string,
 	context: ParseContext
 ): DataNode | StateNode | null {
-	const match = line.match(context.dataRegex);
-	if (match) {
-		const [, name, value] = match;
+	const dataMatch = line.match(context.dataRegex);
+	const stateMatch = line.match(context.stateRegex);
+	if (dataMatch) {
+		const [, name, value] = dataMatch;
+		// support unquoted function call or expression values
+		let parsedValue: string | number | boolean | AstNode;
+		const rawVal = value.trim();
+		// detect simple function calls or dot-expressions, e.g. useParams().id
+		const fnMatch = rawVal.match(
+			/^([A-Za-z_$][\w$]*\([^)]*\)(?:\.[A-Za-z_$][\w$]*)*)$/
+		);
+		if (fnMatch) {
+			parsedValue = { type: "Expression", value: fnMatch[1] };
+		} else {
+			try {
+				parsedValue = JSON.parse(value.replace(/'/g, '"'));
+			} catch (e) {
+				const charIndex = line.indexOf(value);
+				context.diagnostics.push({
+					message: `Invalid value for :data ${name}: ${
+						(e as Error).message
+					}`,
+					line: context.currentLine + 1,
+					severity: DiagnosticSeverity.Error,
+					range: {
+						start: {
+							line: context.currentLine,
+							character: charIndex,
+						},
+						end: {
+							line: context.currentLine,
+							character: charIndex + value.length,
+						},
+					},
+					code: "InvalidDataValue",
+				});
+				return null;
+			}
+		}
+
+		return { type: "Data", name, value: parsedValue };
+	}
+
+	if (stateMatch) {
+		const [, name, value] = stateMatch;
 		let parsedValue: string | number | boolean | AstNode;
 		try {
 			parsedValue = JSON.parse(value.replace(/'/g, '"'));
 		} catch (e) {
 			const charIndex = line.indexOf(value);
 			context.diagnostics.push({
-				message: `Invalid value for :data ${name}: ${
+				message: `Invalid value for :state ${name}: ${
 					(e as Error).message
 				}`,
 				line: context.currentLine + 1,
@@ -130,14 +83,12 @@ function parseData(
 						character: charIndex + value.length,
 					},
 				},
-				code: "InvalidDataValue",
+				code: "InvalidStateValue",
 			});
 			return null;
 		}
-		if (name === "selectedRecipe" || name.startsWith("state_")) {
-			return { type: "State", name, value: parsedValue };
-		}
-		return { type: "Data", name, value: parsedValue };
+
+		return { type: "State", name, value: parsedValue };
 	}
 	return null;
 }
@@ -150,18 +101,29 @@ function parseComment(line: string, _context: ParseContext): AstNode | null {
 }
 
 function parseMarkdown(line: string, context: ParseContext): AstNode | null {
-	const trimmedLine = line.trim();
+	// extract trailing style attribute
+	let trimmedLine = line.trim();
+	let styleValue: string | undefined;
+	const styleMatch = trimmedLine.match(/\s+style="([^"]+)"$/);
+	if (styleMatch) {
+		styleValue = styleMatch[1];
+		trimmedLine = trimmedLine.slice(0, styleMatch.index).trim();
+	}
 
 	// Krepko: **text**
 	const boldMatch = trimmedLine.match(/^\*\*(.+?)\*\*$/);
 	if (boldMatch) {
 		const [, text] = boldMatch;
 		const textNode = parseExpression(text, context.exprRegex);
-		return {
+		const node: MarkdownNode = {
 			type: "Markdown",
 			tag: "strong",
 			children: [{ type: "Text", value: textNode }],
 		};
+		if (styleValue) {
+			node.attributes = { style: styleValue };
+		}
+		return node;
 	}
 
 	// Kurzivno: *text*
@@ -169,11 +131,15 @@ function parseMarkdown(line: string, context: ParseContext): AstNode | null {
 	if (italicMatch) {
 		const [, text] = italicMatch;
 		const textNode = parseExpression(text, context.exprRegex);
-		return {
+		const node: MarkdownNode = {
 			type: "Markdown",
 			tag: "em",
 			children: [{ type: "Text", value: textNode }],
 		};
+		if (styleValue) {
+			node.attributes = { style: styleValue };
+		}
+		return node;
 	}
 
 	// Povezava: [text](url) ali [{expr}]({expr})
@@ -182,12 +148,16 @@ function parseMarkdown(line: string, context: ParseContext): AstNode | null {
 		const [, text, url] = linkMatch;
 		const textNode = parseExpression(text, context.exprRegex);
 		const urlNode = parseExpression(url, context.exprRegex);
-		return {
+		const node: MarkdownNode = {
 			type: "Markdown",
 			tag: "a",
 			attributes: { href: urlNode },
 			children: [{ type: "Text", value: textNode }],
 		};
+		if (styleValue) {
+			node.attributes = { ...node.attributes, style: styleValue };
+		}
+		return node;
 	}
 
 	// Slika: ![alt](src) ali ![alt]({expr})
@@ -195,22 +165,30 @@ function parseMarkdown(line: string, context: ParseContext): AstNode | null {
 	if (imageMatch) {
 		const [, alt, src] = imageMatch;
 		const srcNode = parseExpression(src, context.exprRegex);
-		return {
+		const node: MarkdownNode = {
 			type: "Markdown",
 			tag: "img",
 			attributes: { src: srcNode, alt },
 		};
+		if (styleValue) {
+			node.attributes = { ...node.attributes, style: styleValue };
+		}
+		return node;
 	}
 
 	// Naslov
 	const headerMatch = trimmedLine.match(context.markdownHeaderRegex);
 	if (headerMatch) {
 		const [, hashes, value] = headerMatch;
-		return {
+		const node: MarkdownNode = {
 			type: "Markdown",
 			tag: `h${hashes.length}`,
 			value: parseExpression(value, context.exprRegex),
 		};
+		if (styleValue) {
+			node.attributes = { style: styleValue };
+		}
+		return node;
 	}
 
 	// Seznam
@@ -222,6 +200,9 @@ function parseMarkdown(line: string, context: ParseContext): AstNode | null {
 			tag: "li",
 			value: parseExpression(value, context.exprRegex),
 		};
+		if (styleValue) {
+			liNode.attributes = { style: styleValue };
+		}
 		const parent =
 			context.stack.length > 0
 				? context.stack[context.stack.length - 1].node
@@ -234,11 +215,15 @@ function parseMarkdown(line: string, context: ParseContext): AstNode | null {
 
 	// Odstavek ali izraz
 	if (trimmedLine) {
-		return {
+		const node: MarkdownNode = {
 			type: "Markdown",
-			tag: "div",
+			tag: "p",
 			value: parseExpression(trimmedLine, context.exprRegex),
 		};
+		if (styleValue) {
+			node.attributes = { style: styleValue };
+		}
+		return node;
 	}
 	return null;
 }
@@ -259,34 +244,49 @@ function parseComponent(
 	if (match) {
 		const [, name, propsStr] = match;
 		const props: Record<string, string | number | boolean | AstNode> = {};
-		const forNode = context.stack.find((n) => n.node.type === "For")
-			?.node as ForNode | undefined;
-		if (forNode) {
-			props.title = {
-				type: "Expression",
-				value: `${forNode.variable}.title`,
-			};
-			props.description = {
-				type: "Expression",
-				value: `${forNode.variable}.description`,
-			};
-			props.image = {
-				type: "Expression",
-				value: `${forNode.variable}.image`,
-			};
-			props.link = {
-				type: "Expression",
-				value: `${forNode.variable}.link`,
-			};
-		}
+
 		if (propsStr) {
-			const propPairs = propsStr.split(/\s+(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+			// split props, ignoring spaces within braces or quotes
+			const propPairs: string[] = [];
+			let current = "";
+			let braceDepth = 0;
+			let inQuotes = false;
+			for (let i = 0; i < propsStr.length; i++) {
+				const char = propsStr[i];
+				if (char === '"' && propsStr[i - 1] !== "\\") {
+					inQuotes = !inQuotes;
+					current += char;
+				} else if (!inQuotes) {
+					if (char === "{") {
+						braceDepth++;
+						current += char;
+					} else if (char === "}") {
+						braceDepth--;
+						current += char;
+					} else if (char === " " && braceDepth === 0) {
+						if (current.trim()) {
+							propPairs.push(current.trim());
+						}
+						current = "";
+					} else {
+						current += char;
+					}
+				} else {
+					current += char;
+				}
+			}
+			if (current.trim()) {
+				propPairs.push(current.trim());
+			}
+			// parse each key=value
 			for (const prop of propPairs) {
-				const [key, value] = prop.split("=").map((s) => s.trim());
-				if (!key || !value) {
+				const [key, ...rest] = prop.split("=");
+				const value = rest.join("=").trim();
+				const propName = key.trim();
+				if (!propName || !value) {
 					const charIndex = line.indexOf(prop);
 					context.diagnostics.push({
-						message: `Nepravilna lastnost: ${prop}`,
+						message: `Invalid property: ${prop}`,
 						line: context.currentLine + 1,
 						severity: DiagnosticSeverity.Error,
 						range: {
@@ -303,18 +303,28 @@ function parseComponent(
 					});
 					continue;
 				}
-				const exprMatch = value.match(context.exprRegex);
-				if (exprMatch) {
-					props[key] = { type: "Expression", value: exprMatch[1] };
+
+				// full expression in braces, including template literals
+				if (value.startsWith("{") && value.endsWith("}")) {
+					const inner = value.slice(1, -1);
+					props[propName] = { type: "Expression", value: inner };
+				} else if (value.startsWith('"') && value.endsWith('"')) {
+					props[propName] = value.slice(1, -1);
+				} else if (value === "true" || value === "false") {
+					props[propName] = value === "true";
+				} else if (!isNaN(Number(value))) {
+					props[propName] = Number(value);
 				} else {
-					const cleanValue = value.replace(/^"(.*)"$/, "$1");
-					if (cleanValue === "true" || cleanValue === "false") {
-						props[key] = cleanValue === "true";
-					} else if (!isNaN(Number(cleanValue))) {
-						props[key] = Number(cleanValue);
-					} else {
-						props[key] = cleanValue;
-					}
+					// fallback: treat as raw string or template literal
+					props[propName] = value;
+				}
+
+				// if we have Route and Element, change element to Component
+				if (name === "Route" && props.element) {
+					props.element = {
+						type: "Expression",
+						value: `<${(props.element as ExpressionNode).value}/>`,
+					};
 				}
 			}
 		}
@@ -342,17 +352,17 @@ function parseDirective(line: string, context: ParseContext): AstNode | null {
 	}
 
 	if (trimmedLine.match(context.fetchRegex)) {
-		const [, variable, initVariable, url, method] = trimmedLine.match(
+		const [, variable, initVariable, url, method, auth] = trimmedLine.match(
 			context.fetchRegex
 		)!;
-		console.log(
-			`Parsing fetch directive: variable=${variable}, initVariable=${initVariable}, url=${url}, method=${method}`
-		);
+
 		const fetchNode: FetchNode = {
 			type: "Fetch",
-			url: url.trim(),
+			url: "`" + url.trim() + "`", // Use template literal for URL
 			method: method ? method.toUpperCase().trim() : "GET",
-			headers: {},
+			headers: auth
+				? { Authorization: "Bearer ${localStorage.getItem('token')}" }
+				: {},
 			variable: variable.trim(),
 			initVariable: initVariable,
 		};
@@ -370,16 +380,35 @@ function parseDirective(line: string, context: ParseContext): AstNode | null {
 	return null;
 }
 
+// Parse function directive and create FunctionNode
+function parseFunction(
+	line: string,
+	context: ParseContext
+): FunctionNode | null {
+	const trimmed = line.trim();
+	const match = trimmed.match(context.functionRegex);
+	if (match) {
+		return {
+			type: "JavaScript",
+			signature: match[1],
+			body: [],
+		} as FunctionNode;
+	}
+	return null;
+}
+
 function handleIndentation(
 	indent: number,
 	context: ParseContext
 ): AstNode | null {
+	// Pop contexts when current indent is not greater than parent's indent
 	while (
 		context.stack.length > 0 &&
-		indent < context.stack[context.stack.length - 1].indent
+		indent <= context.stack[context.stack.length - 1].indent
 	) {
 		context.stack.pop();
 	}
+	// The remaining top of stack (if any) is the parent for deeper indented nodes
 	return context.stack.length > 0
 		? context.stack[context.stack.length - 1].node
 		: null;
@@ -388,9 +417,19 @@ function handleIndentation(
 function parseLine(line: string, context: ParseContext): void {
 	const indent = line.match(/^\s*/)?.[0].length || 0;
 	const parent = handleIndentation(indent, context);
+
+	// if we're inside a function block, capture raw body lines
+	if (parent && (parent as AstNode).type === "JavaScript") {
+		const fnNode = parent as FunctionNode;
+		fnNode.body = fnNode.body || [];
+		fnNode.body.push(line.trim());
+		return;
+	}
+
 	const node =
 		parseComment(line, context) ||
 		parseData(line, context) ||
+		parseFunction(line, context) ||
 		parseDirective(line, context) ||
 		parseComponent(line, context) ||
 		(context.currentLine > 0 ? parseMarkdown(line, context) : null);
@@ -400,6 +439,7 @@ function parseLine(line: string, context: ParseContext): void {
 			(parent.children = parent.children || []).push(node);
 			if (
 				node.type === "Component" ||
+				node.type === "JavaScript" ||
 				node.type === "For" ||
 				node.type === "If" ||
 				(node.type === "Markdown" && node.tag === "ul")
@@ -410,6 +450,7 @@ function parseLine(line: string, context: ParseContext): void {
 			context.ast.push(node);
 			if (
 				node.type === "Component" ||
+				node.type === "JavaScript" ||
 				node.type === "For" ||
 				node.type === "If" ||
 				(node.type === "Markdown" && node.tag === "ul")
@@ -442,7 +483,7 @@ export function parseLunor(text: string): {
 			end: { line: number; character: number };
 		};
 		severity: number;
-		code?: string; // Optional code for diagnostics
+		code?: string; // Optional code for codeactions
 	}[] = [];
 	const lines = text.split("\n").map((line) => line.replace(/\r$/, ""));
 	const ast: AstNode[] = [];
@@ -463,9 +504,11 @@ export function parseLunor(text: string): {
 		forRegex: /^:(?:for|forEach)\s+(\w+)\s+in\s+([\w.]+)$/,
 		ifRegex: /^:if\s+(.+)$/,
 		fetchRegex:
-			/^:fetch\s+(\w+)\s*\(\s*(\{[^}]*\}\[\])\s*\)\s+from\s+"([^"]+)"\s+(GET|POST|PUT|DELETE)\s*$/,
+			/^:fetch\s+(\w+)\s*\(\s*(\{[^}]*\}\[*\]*)\s*\)\s+from\s+["`]?([^"`]+)["`]?[ ]+(GET|POST|PUT|DELETE)\s?(auth)*$/,
 		propRegex: /^(\w+):(.+)$/,
 		exprRegex: /\{(.+?)\}/,
+		stateRegex: /^:state\s+(\w+)=(.+)$/,
+		functionRegex: /^:js$/,
 	};
 
 	// first line is always the component name
@@ -567,6 +610,9 @@ function generateMarkdownNode(
 	level: number,
 	indentFn: (n: number) => string
 ): string {
+	const styleAttr = node.attributes?.style
+		? ` className="${node.attributes.style}"`
+		: "";
 	if (node.tag === "a") {
 		const href = node.attributes?.href;
 		const hrefValue =
@@ -581,7 +627,9 @@ function generateMarkdownNode(
 			textNode.value.type === "Expression"
 				? `{${(textNode.value as ExpressionNode).value}}`
 				: textNode?.value || "";
-		return `${indentFn(level)}<a href=${hrefValue}>${textValue}</a>`;
+		return `${indentFn(
+			level
+		)}<a href=${hrefValue}${styleAttr}>${textValue}</a>`;
 	}
 	if (node.tag === "img") {
 		const src = node.attributes?.src;
@@ -591,7 +639,7 @@ function generateMarkdownNode(
 				: `"${src || ""}"`;
 		return `${indentFn(level)}<img src=${srcValue} alt="${
 			node.attributes?.alt || ""
-		}" />`;
+		}"${styleAttr} />`;
 	}
 	if (node.tag === "strong" || node.tag === "em") {
 		const textNode = node.children?.[0];
@@ -602,15 +650,17 @@ function generateMarkdownNode(
 			textNode.value.type === "Expression"
 				? `{${(textNode.value as ExpressionNode).value}}`
 				: textNode?.value || "";
-		return `${indentFn(level)}<${node.tag}>${textValue}</${node.tag}>`;
+		return `${indentFn(level)}<${node.tag}${styleAttr}>${textValue}</${
+			node.tag
+		}>`;
 	}
 	if (node.children) {
 		const childrenCode = node.children
 			.map((child) => generateNode(child, level + 1, indentFn))
 			.join("\n");
-		return `${indentFn(level)}<${node.tag}>\n${childrenCode}\n${indentFn(
-			level
-		)}</${node.tag}>`;
+		return `${indentFn(level)}<${
+			node.tag
+		}${styleAttr}>\n${childrenCode}\n${indentFn(level)}</${node.tag}>`;
 	}
 	const value =
 		node.value &&
@@ -618,7 +668,7 @@ function generateMarkdownNode(
 		node.value.type === "Expression"
 			? `{${(node.value as ExpressionNode).value}}`
 			: node.value || "";
-	return `${indentFn(level)}<${node.tag}>${value}</${node.tag}>`;
+	return `${indentFn(level)}<${node.tag}${styleAttr}>${value}</${node.tag}>`;
 }
 
 function generateComponentNode(
@@ -626,7 +676,9 @@ function generateComponentNode(
 	level: number,
 	indentFn: (n: number) => string
 ): string {
+	// we should skip style otherwise it is twice in the props
 	const propsStr = Object.entries(node.props)
+		.filter(([key]) => key !== "style")
 		.map(([key, value]) => {
 			if (
 				value &&
@@ -641,22 +693,46 @@ function generateComponentNode(
 			return `${key}={${value}}`;
 		})
 		.join(" ");
+	// include style prop if present
+	const styleEntry = node.props.style
+		? typeof node.props.style === "string"
+			? `className="${node.props.style}"`
+			: `className={${(node.props.style as ExpressionNode).value}}`
+		: "";
+	const fullProps = [propsStr, styleEntry].filter(Boolean).join(" ");
 	const childrenCode = node.children
 		.filter((child) => child.type !== "On")
 		.map((child) => generateNode(child, level + 1, indentFn))
 		.filter((code) => code)
 		.join("\n");
 
+	// if there are no children, self-close the tag
+	if (node.children.length === 0 && !fullProps) {
+		return `${indentFn(level)}<${node.name} />`;
+	}
+
 	if (childrenCode) {
 		return `${indentFn(level)}<${
 			node.name
-		} ${propsStr}>\n${childrenCode}\n${indentFn(level)}</${node.name}>`;
+		} ${fullProps}>\n${childrenCode}\n${indentFn(level)}</${node.name}>`;
 	}
-	return `${indentFn(level)}<${node.name} ${propsStr}/>`;
+	return `${indentFn(level)}<${node.name} ${fullProps}/>`;
 }
 
 function generateDataNode(node: DataNode, declarations: string[]): string {
-	declarations.push(`const ${node.name} = ${JSON.stringify(node.value)};`);
+	// handle expression AST values directly
+	if (
+		typeof node.value === "object" &&
+		(node.value as ExpressionNode).type === "Expression"
+	) {
+		// emit raw expression
+		declarations.push(
+			`let ${node.name} = ${(node.value as ExpressionNode).value};`
+		);
+	} else {
+		// emit JSON literal for primitive values
+		declarations.push(`let ${node.name} = ${JSON.stringify(node.value)};`);
+	}
 	return "";
 }
 
@@ -685,7 +761,8 @@ function generateFetchNode(
 		throw new Error("Fetch node must have a URL.");
 	}
 
-	const fetchCode = `fetch(${node.url}, {
+	const nodeURL = "`" + node.url + "`"; // Use template literal for URL
+	const fetchCode = `fetch(${nodeURL}, {
   		method: '${node.method || "GET"}',
   		headers: ${JSON.stringify(node.headers || {})},
   		body: ${node.body ? JSON.stringify(node.body) : "null"}
@@ -697,7 +774,7 @@ function generateFetchNode(
 		imports.push("useState");
 	}
 	declarations.push(
-		`const [${node.variable}, set${node.variable}] = useState(${node.initVariable});`
+		`const [${node.variable}, set${node.variable}] = useState<${node.initVariable}>();`
 	);
 	declarations.push(
 		`useEffect(() => {
@@ -718,11 +795,13 @@ function generateForNode(
 	const childrenCode = node.children
 		.map((child) => generateNode(child, level + 1, indentFn))
 		.join("\n");
-	return `${indentFn(level)}{${node.collection}.map((${node.variable}, i) => (
-	<>
+	return `${indentFn(level)}<>{${node.collection}.map((${
+		node.variable
+	}, i) => (
+
       ${childrenCode}
   ${indentFn(level)}
-  </>))}`;
+  ))}</>`;
 }
 
 function generateIfNode(
@@ -746,12 +825,28 @@ function generateCommentNode(
 	return `${indentFn(level)}{/* ${node.value || ""} */}`;
 }
 
+function generateFunctionNode(
+	node: FunctionNode,
+	level: number,
+	indentFn: (n: number) => string,
+	functions: string[]
+): string {
+	// indent each body line one level deeper
+	const bodyText = (node.body || [])
+		.map((line) => indentFn(level + 1) + line)
+		.join("\n");
+
+	functions.push(`\n${bodyText}\n${indentFn(level)}`);
+	return "";
+}
+
 function generateNode(
 	node: AstNode,
 	level: number,
 	indentFn: (n: number) => string,
 	declarations: string[] = [],
-	imports: string[] = []
+	imports: string[] = [],
+	functions: string[] = []
 ): string {
 	switch (node.type) {
 		case "Markdown":
@@ -766,6 +861,13 @@ function generateNode(
 			return generateFetchNode(node as FetchNode, declarations, imports);
 		case "Data":
 			return generateDataNode(node as DataNode, declarations);
+		case "JavaScript":
+			return generateFunctionNode(
+				node as FunctionNode,
+				level,
+				indentFn,
+				functions
+			);
 		case "State":
 			return generateStateNode(node as StateNode, declarations, imports);
 		case "For":
@@ -816,26 +918,62 @@ function discoverComponentFiles(workspaceRoot: string): Record<string, string> {
 export function generateReactCode(
 	ast: AstNode[],
 	component: ParentComponent | null,
-	workspaceRoot: string // pass in from your server
+	workspaceRoot: string
 ): string {
 	const imports: string[] = [];
 	const declarations: string[] = [];
-
+	const functions: string[] = [];
 	// 1) collect every component tag used in the AST
 	const used = new Set<string>();
 	function collect(n: AstNode) {
 		if (n.type === "Component") {
 			used.add((n as ComponentNode).name);
 		}
+		// if component is Route and props contain element, add that element
+		if (n.type === "Component" && (n as ComponentNode).name === "Route") {
+			const elementProp = (n as ComponentNode).props["element"];
+			if (
+				typeof elementProp === "object" &&
+				elementProp.type === "Expression"
+			) {
+				used.add((elementProp as ExpressionNode).value.slice(1, -2)); // remove < and />
+			}
+		}
+
+		// check if useParams is used
+		if (
+			n.type === "Data" &&
+			typeof n.value === "object" &&
+			n.value.type === "Expression" &&
+			typeof n.value.value === "string" &&
+			n.value.value.startsWith("useParams")
+		) {
+			used.add("useParams");
+		}
+
 		n.children?.forEach(collect);
 	}
 	ast.forEach(collect);
 
+	const routerTags = [
+		"BrowserRouter",
+		"Route",
+		"Routes",
+		"Link",
+		"useParams",
+	];
+	const routerTagsUsed = routerTags.filter((tag) => used.has(tag));
+	const routerImports = routerTagsUsed.length
+		? `import { ${routerTagsUsed.join(", ")} } from 'react-router-dom';\n`
+		: "";
+
 	// 2) build map of tag → relative .lnr path
 	const lunorMap = discoverComponentFiles(workspaceRoot);
-
 	const importStmts = Array.from(used)
 		.map((tag) => {
+			if (tag[0] === tag[0].toLowerCase() || routerTags.includes(tag)) {
+				return;
+			}
 			const rel = lunorMap[tag];
 			if (rel) {
 				// Use the relative path exactly as discovered to mirror folder structure
@@ -848,7 +986,9 @@ export function generateReactCode(
 		return "  ".repeat(l);
 	}
 	const body = ast
-		.map((n) => generateNode(n, 2, indent, declarations, imports))
+		.map((n) =>
+			generateNode(n, 2, indent, declarations, imports, functions)
+		)
 		.filter(Boolean)
 		.join("\n");
 	const hookImport = imports.length
@@ -858,6 +998,7 @@ export function generateReactCode(
 		? declarations.map((d) => indent(1) + d).join("\n") + "\n"
 		: "";
 
+	const hasProps = component?.props && component.props.length > 0;
 	const propsType = `type ${component?.name}Props = {
 		${(component?.props ?? [])
 			.map(({ name, type, optional }) => {
@@ -878,14 +1019,22 @@ export function generateReactCode(
 	const props = (component?.props ?? []).map(({ name }) => {
 		return `${name}`;
 	});
+
 	return `// AUTO-GENERATED by LunorParser
 ${importStmts}
+${routerImports}
 ${hookImport}
-${propsType ? propsType : ""}
-export default function ${component?.name || "App"}({${props}}: ${
-		component?.name
-	}Props) {
-${decls}  return (
+${hasProps && propsType ? propsType : ""}
+${
+	hasProps
+		? `export default function ${component?.name || "App"}({${props}}: ${
+				component?.name
+		  }Props) {`
+		: `export default function ${component?.name || "App"}() {`
+}
+${decls}
+${functions.length > 0 ? functions.join("\n\n") + "\n" : ""}
+  return (
 	<>
 ${body}
 	</>

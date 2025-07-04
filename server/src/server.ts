@@ -72,7 +72,7 @@ connection.onInitialize((params: InitializeParams) => {
 				triggerCharacters: [":"],
 			},
 			hoverProvider: true,
-			signatureHelpProvider: { triggerCharacters: ["(", ","] },
+			signatureHelpProvider: { triggerCharacters: [" "] },
 			documentFormattingProvider: true,
 			codeActionProvider: true,
 			diagnosticProvider: {
@@ -84,7 +84,7 @@ connection.onInitialize((params: InitializeParams) => {
 	return result;
 });
 
-// Helper: parse first line of a doc for “Tag(param:type, …)” definitions
+// Helper: parse first line of a doc for “Tag param:type, …)” definitions
 function parseComponentDefinition(doc: TextDocument) {
 	const text = doc.getText();
 	const firstLine = text.split(/\r?\n/)[0].trim();
@@ -106,7 +106,7 @@ function parseComponentDefinition(doc: TextDocument) {
 		return ParameterInformation.create(label, docString);
 	});
 	const signature: SignatureInformation = {
-		label: `${tag}(${parameters.map((p) => p.label).join(", ")})`,
+		label: `:${tag} ${parameters.map((p) => p.label).join(" ")})`,
 		documentation: `Props for ${tag}`,
 		parameters,
 	};
@@ -124,10 +124,10 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp => {
 		return { signatures: [], activeSignature: 0, activeParameter: 0 };
 	}
 
-	// get text up to cursor, match “:Tag(”
+	// get text up to cursor, match “:Tag ”
 	const offset = doc.offsetAt(params.position);
 	const pre = doc.getText().slice(0, offset);
-	const m = /:(\w+)\s*\($/.exec(pre);
+	const m = /:(\w+)\s{1}$/.exec(pre);
 	if (!m) {
 		return { signatures: [], activeSignature: 0, activeParameter: 0 };
 	}
@@ -137,9 +137,8 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp => {
 		return { signatures: [], activeSignature: 0, activeParameter: 0 };
 	}
 
-	// determine active parameter index by counting commas after the “(”
-	const afterParen = pre.split("(").pop() || "";
-	const activeParam = afterParen.split(",").length - 1;
+	const afterParen = pre.split(" ").pop() || "";
+	const activeParam = afterParen.split(" ").length - 1;
 
 	return {
 		signatures: [sigInfo],
@@ -206,6 +205,44 @@ interface ExampleSettings {
 // Cache the settings of all open documents
 const documentSettings = new Map<string, Thenable<ExampleSettings>>();
 
+// // only for development
+// connection.onDidSaveTextDocument(async (params) => {
+// 	console.log("Tukaj");
+// 	console.log(`Document saved: ${params.textDocument.uri}`);
+// 	// Parse the document to update component definitions
+// 	try {
+// 		// Parsiraj besedilo in ga pretvori v JSX
+// 		console.log("Pretvarjanje Lunor v React JSX ...");
+// 		const { ast, diagnostics, component } = parseLunor(params.text ?? "");
+// 		// determine current file path from URI
+// 		const jsx = generateReactCode(ast, component, workspaceRoot);
+// 		console.log("Problems:", diagnostics);
+// 		console.log(ast);
+// 		console.log(component);
+// 		if (diagnostics.length > 0) {
+// 			connection.sendDiagnostics({
+// 				uri: params.textDocument.uri,
+// 				diagnostics: diagnostics.map(
+// 					(diag): Diagnostic => ({
+// 						severity: diag.severity as DiagnosticSeverity,
+// 						range: diag.range,
+// 						message: diag.message,
+// 						source: "lunor",
+// 						code: diag.code,
+// 					})
+// 				),
+// 			});
+// 		}
+
+// 		// Vrni JSX kodo kot rezultat
+// 		return jsx;
+// 	} catch (err) {
+// 		// Poskrbi za napake pri parserju
+// 		connection.console.error(`Napaka pri pretvorbi Lunor v React: ${err}`);
+// 		return "// Napaka pri pretvorbi";
+// 	}
+// });
+
 connection.onDidChangeConfiguration((_change) => {
 	if (hasConfigurationCapability) {
 		// Reset all cached document settings
@@ -258,10 +295,9 @@ connection.onRequest("lunor/generateReact", async (params) => {
 		// Parsiraj besedilo in ga pretvori v JSX
 		console.log("Pretvarjanje Lunor v React JSX ...");
 		const { ast, diagnostics, component } = parseLunor(params.text);
-		const jsx = generateReactCode(ast, component, workspaceRoot);
-		console.log("Problems:", diagnostics);
 		console.log(ast);
-		console.log(component);
+		// determine current file path from URI
+		const jsx = generateReactCode(ast, component, workspaceRoot);
 
 		if (diagnostics.length > 0) {
 			connection.sendDiagnostics({
@@ -380,7 +416,7 @@ connection.onCompletion((textDocumentPosition): CompletionItem[] => {
 			getAllComponentTags().map((tag) => ({
 				label: `:${tag}`,
 				kind: CompletionItemKind.Class,
-				insertText: `${tag}{\n\t$0\n}`, // Snippet for component
+				insertText: `${tag} $0 `, // Snippet for component
 				insertTextFormat: InsertTextFormat.Snippet,
 				detail: `A ${tag} component.`,
 				data: tag, // Use tag as data for later resolution
