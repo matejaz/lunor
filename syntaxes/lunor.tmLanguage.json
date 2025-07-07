@@ -9,7 +9,8 @@
 		{ "include": "#props" },
 		{ "include": "#strings" },
 		{ "include": "#numbers" },
-		{ "include": "#listItem" }
+		{ "include": "#listItem" },
+		{ "include": "#js" }
 	],
 	"repository": {
 		"directives": {

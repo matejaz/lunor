@@ -361,7 +361,10 @@ function parseDirective(line: string, context: ParseContext): AstNode | null {
 			url: "`" + url.trim() + "`", // Use template literal for URL
 			method: method ? method.toUpperCase().trim() : "GET",
 			headers: auth
-				? { Authorization: "Bearer ${localStorage.getItem('token')}" }
+				? {
+						Authorization:
+							"Bearer ${localStorage.getItem('token')}",
+				  }
 				: {},
 			variable: variable.trim(),
 			initVariable: initVariable,
@@ -762,11 +765,17 @@ function generateFetchNode(
 	}
 
 	const nodeURL = "`" + node.url + "`"; // Use template literal for URL
+	// if Authorization header is set, use it, but not around the token
+
 	const fetchCode = `fetch(${nodeURL}, {
   		method: '${node.method || "GET"}',
-  		headers: ${JSON.stringify(node.headers || {})},
+  		headers: ${JSON.stringify(node.headers || {}).replace(
+			"\"Bearer ${localStorage.getItem('token')}\"",
+			'`Bearer ${localStorage.getItem("token")}`'
+		)},
   		body: ${node.body ? JSON.stringify(node.body) : "null"}
 		})`;
+
 	if (!imports.includes("useEffect")) {
 		imports.push("useEffect");
 	}
