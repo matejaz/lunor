@@ -468,6 +468,14 @@ connection.onCompletion((textDocumentPosition): CompletionItem[] => {
 				detail: "Fetch data",
 				data: "fetch",
 			},
+			{
+				label: ":js",
+				kind: CompletionItemKind.Snippet,
+				insertText: "js code here $0",
+				insertTextFormat: InsertTextFormat.Snippet,
+				detail: "JavaScript code block",
+				data: "js",
+			},
 		];
 		items.push(...controlFlowSuggestions);
 	}

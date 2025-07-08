@@ -17,7 +17,7 @@
 			"patterns": [
 				{
 					"name": "keyword.control.lunor",
-					"match": "^\\s*:(data|state|fetch|if|for)\\b"
+					"match": "^\\s*:(data|state|fetch|if|for|js)\\b"
 				}
 			]
 		},
