@@ -85,6 +85,7 @@ export interface ParseContext {
 	diagnostics: Diagnostic[];
 	stack: { node: AstNode; indent: number }[];
 	ast: AstNode[];
+	imports: string[]; // List of imported components or modules
 	parentComponent: ParentComponent | null;
 	currentLine: number;
 	componentName?: string;
@@ -101,6 +102,7 @@ export interface ParseContext {
 	exprRegex: RegExp;
 	stateRegex: RegExp;
 	functionRegex: RegExp;
+	importRegex: RegExp;
 }
 
 export interface ParentComponent {

@@ -294,10 +294,12 @@ connection.onRequest("lunor/generateReact", async (params) => {
 	try {
 		// Parsiraj besedilo in ga pretvori v JSX
 		console.log("Pretvarjanje Lunor v React JSX ...");
-		const { ast, diagnostics, component } = parseLunor(params.text);
+		const { ast, diagnostics, component, imports } = parseLunor(
+			params.text
+		);
 		console.log(ast);
 		// determine current file path from URI
-		const jsx = generateReactCode(ast, component, workspaceRoot);
+		const jsx = generateReactCode(ast, component, workspaceRoot, imports);
 
 		if (diagnostics.length > 0) {
 			connection.sendDiagnostics({
