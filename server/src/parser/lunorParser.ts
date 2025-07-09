@@ -550,7 +550,7 @@ export function parseLunor(text: string): {
 		// First line defines component name and props
 		if (context.currentLine === 0) {
 			const firstLine = line.trim();
-			const m = /^(\w+)\(([^)]*)\)$/.exec(firstLine);
+			const m = /^(\w+)\((.*)\)$/.exec(firstLine);
 			if (!m) {
 				context.diagnostics.push({
 					message: `Invalid component signature: ${firstLine}`,
@@ -570,7 +570,7 @@ export function parseLunor(text: string): {
 				const tag = m[1];
 				const paramsRaw = m[2];
 				const rawList = paramsRaw
-					.split(",")
+					.split(/,(?![^(]*\))/) // split by commas not inside parentheses
 					.map((s) => s.trim())
 					.filter(Boolean);
 				const props: {
@@ -578,12 +578,13 @@ export function parseLunor(text: string): {
 					type: string;
 					optional?: boolean;
 				}[] = [];
+
 				for (const spec of rawList) {
-					const parts = /^(\w+)(\?)?:(\w+(\[\])*)$/.exec(spec);
+					const parts = /^(\w+)(\?)?:\s*(.+)$/.exec(spec);
 					if (parts) {
 						const propName = parts[1];
 						const optional = parts[2] || "";
-						const type = parts[3];
+						const type = parts[3].trim();
 						props.push({
 							name: propName,
 							type,
@@ -793,14 +794,19 @@ function generateFetchNode(
 	if (!imports.includes("useState")) {
 		imports.push("useState");
 	}
+	const variableName = node.variable ?? "data";
 	declarations.push(
-		`const [${node.variable}, set${node.variable}] = useState<${node.initVariable}>();`
+		`const [${variableName}, set${
+			variableName.charAt(0).toUpperCase() + variableName.slice(1)
+		}] = useState<${node.initVariable}>();`
 	);
 	declarations.push(
 		`useEffect(() => {
 		${fetchCode}
 		.then(response => response.json())
-		.then(data => set${node.variable}(data))
+		.then(data => set${node.variable
+			?.charAt(0)
+			.toUpperCase()}${node.variable?.slice(1)}(data))
 		.catch(error => console.error('Fetch error:', error));
 	}, []);`
 	);
@@ -1024,15 +1030,9 @@ export function generateReactCode(
 		${(component?.props ?? [])
 			.map(({ name, type, optional }) => {
 				name = name.replace(/[^a-zA-Z0-9_]/g, "_");
-				if (typeof type === "string") {
-					return `${name}${optional ? "?" : ""}: string;`;
-				} else if (typeof type === "number") {
-					return `${name}${optional ? "?" : ""}: number;`;
-				} else if (typeof type === "boolean") {
-					return `${name}${optional ? "?" : ""}: boolean;`;
-				} else {
-					return `${name}${optional ? "?" : ""}: any;`; // Fallback for complex types
-				}
+				return `\t${name}${optional ? "?" : ""}${
+					type ? `: ${type}` : ""
+				};`;
 			})
 			.join("\n")}
 };\n`;
