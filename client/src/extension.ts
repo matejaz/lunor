@@ -256,14 +256,14 @@ export function activate(context: ExtensionContext) {
 				fs.writeFileSync(outputFile, result, "utf-8");
 
 				window.showInformationMessage(
-					`React komponenta ustvarjena: ${path.relative(
+					`React component created: ${path.relative(
 						projectRoot,
 						outputFile
 					)}`
 				);
 			}
 			window.showInformationMessage(
-				"Obdelava vseh lunor datotek je končana."
+				"All lunor files processed successfully."
 			);
 		})
 	);
@@ -321,7 +321,7 @@ export function activate(context: ExtensionContext) {
 			fs.writeFileSync(outputFile, result, "utf-8");
 
 			window.showInformationMessage(
-				`React komponenta ustvarjena: ${path.relative(
+				`React component created: ${path.relative(
 					projectRoot,
 					outputFile
 				)}`

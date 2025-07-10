@@ -16,6 +16,19 @@ import {
 	ParentComponent,
 	FunctionNode,
 } from "./types";
+// Helper: attach line/column info to AST nodes
+function attachPosition<T extends AstNode>(
+	node: T,
+	startCol: number,
+	endCol: number,
+	context: ParseContext
+): T {
+	node.startLine = context.currentLine;
+	node.startColumn = startCol;
+	node.endLine = context.currentLine;
+	node.endColumn = endCol;
+	return node;
+}
 function parseData(
 	line: string,
 	context: ParseContext
@@ -391,11 +404,21 @@ function parseFunction(
 	const trimmed = line.trim();
 	const match = trimmed.match(context.functionRegex);
 	if (match) {
-		return {
-			type: "JavaScript",
-			signature: match[1],
-			body: [],
-		} as FunctionNode;
+		// compute columns for signature
+		const sigText = match[0];
+		const startCol = line.indexOf(sigText);
+		const endCol = startCol + sigText.length;
+		const fn: FunctionNode = attachPosition(
+			{
+				type: "Function",
+				signature: match[1],
+				body: [],
+			},
+			startCol,
+			endCol,
+			context
+		);
+		return fn;
 	}
 	return null;
 }
@@ -422,17 +445,10 @@ function parseLine(line: string, context: ParseContext): void {
 	const parent = handleIndentation(indent, context);
 
 	// if we're inside a function block, capture raw body lines
-	if (parent && (parent as AstNode).type === "JavaScript") {
-		// get check if it is import
-		const trimmedLine = line.trim();
-		const importMatch = trimmedLine.match(context.importRegex);
-		if (importMatch) {
-			context.imports.push(line.trim());
-		} else {
-			const fnNode = parent as FunctionNode;
-			fnNode.body = fnNode.body || [];
-			fnNode.body.push(line.trim());
-		}
+	if (parent && parent.type === "Function") {
+		const fnNode = parent as FunctionNode;
+		fnNode.body.push(line.trim());
+		fnNode.endLine = context.currentLine;
 		return;
 	}
 
@@ -445,11 +461,13 @@ function parseLine(line: string, context: ParseContext): void {
 		(context.currentLine > 0 ? parseMarkdown(line, context) : null);
 
 	if (node) {
+		// attach overall position to every node
+		attachPosition(node, indent, indent + line.trim().length, context);
 		if (parent) {
 			(parent.children = parent.children || []).push(node);
 			if (
 				node.type === "Component" ||
-				node.type === "JavaScript" ||
+				node.type === "Function" ||
 				node.type === "For" ||
 				node.type === "If" ||
 				(node.type === "Markdown" && node.tag === "ul")
@@ -460,7 +478,7 @@ function parseLine(line: string, context: ParseContext): void {
 			context.ast.push(node);
 			if (
 				node.type === "Component" ||
-				node.type === "JavaScript" ||
+				node.type === "Function" ||
 				node.type === "For" ||
 				node.type === "If" ||
 				(node.type === "Markdown" && node.tag === "ul")

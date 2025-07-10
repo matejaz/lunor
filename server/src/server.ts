@@ -23,6 +23,9 @@ import {
 	Diagnostic,
 	CodeAction,
 	CodeActionKind,
+	DocumentSymbol,
+	SymbolKind,
+	Range,
 } from "vscode-languageserver/node";
 import { URI } from "vscode-uri";
 import * as fs from "fs";
@@ -30,6 +33,7 @@ import * as path from "path";
 import * as glob from "fast-glob";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { generateReactCode, parseLunor } from "./parser/lunorParser";
+import type { AstNode, ForNode, IfNode } from "./parser/types";
 
 let workspaceRoot = ""; // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -79,12 +83,15 @@ connection.onInitialize((params: InitializeParams) => {
 				interFileDependencies: false,
 				workspaceDiagnostics: false,
 			},
+			renameProvider: true,
+			documentSymbolProvider: true, // re-enabled
+			workspaceSymbolProvider: true,
 		},
 	};
 	return result;
 });
 
-// Helper: parse first line of a doc for “Tag param:type, …)” definitions
+// Helper: parse first line of a doc for “Tag param:type, …” definitions
 function parseComponentDefinition(doc: TextDocument) {
 	const text = doc.getText();
 	const firstLine = text.split(/\r?\n/)[0].trim();
@@ -106,7 +113,7 @@ function parseComponentDefinition(doc: TextDocument) {
 		return ParameterInformation.create(label, docString);
 	});
 	const signature: SignatureInformation = {
-		label: `:${tag} ${parameters.map((p) => p.label).join(" ")})`,
+		label: `:${tag} ${parameters.map((p) => p.label).join(" ")}`,
 		documentation: `Props for ${tag}`,
 		parameters,
 	};
@@ -117,6 +124,119 @@ function parseComponentDefinition(doc: TextDocument) {
 documents.onDidOpen((e) => parseComponentDefinition(e.document));
 documents.onDidChangeContent((e) => parseComponentDefinition(e.document));
 
+// Exported helper for testing and reuse: generate document symbols for a given text and URI
+export function generateDocumentSymbols(
+	text: string,
+	uri: string
+): DocumentSymbol[] {
+	// only for Lunor documents
+	if (!uri.toLowerCase().endsWith(".lnr")) {
+		return [];
+	}
+	const lines = text.split(/\r?\n/);
+	if (lines.length === 0) {
+		return [];
+	}
+	const { ast, component } = parseLunor(text);
+	if (!component) {
+		return [];
+	}
+	const fullRange = Range.create(0, 0, lines.length - 1, 0);
+	const selectRange = Range.create(0, 0, 0, component.name.length);
+	const root = DocumentSymbol.create(
+		component.name,
+		undefined,
+		SymbolKind.Class,
+		fullRange,
+		selectRange,
+		[]
+	);
+	function visit(node: AstNode, parent: DocumentSymbol) {
+		if (node.type === "For") {
+			const forNode = node as ForNode;
+			const symbol = DocumentSymbol.create(
+				`for ${forNode.variable} in ${forNode.collection}`,
+				undefined,
+				SymbolKind.Function,
+				Range.create(
+					node.startLine ?? 0,
+					0,
+					node.endLine ?? node.startLine ?? 0,
+					0
+				),
+				Range.create(
+					node.startLine ?? 0,
+					0,
+					node.endLine ?? node.startLine ?? 0,
+					0
+				),
+				[]
+			);
+			parent.children?.push(symbol);
+			return;
+		}
+		if (node.type === "If") {
+			const ifNode = node as IfNode;
+			const symbol = DocumentSymbol.create(
+				`if ${ifNode.condition}`,
+				undefined,
+				SymbolKind.Function,
+				Range.create(
+					node.startLine ?? 0,
+					0,
+					node.endLine ?? node.startLine ?? 0,
+					0
+				),
+				Range.create(
+					node.startLine ?? 0,
+					0,
+					node.endLine ?? node.startLine ?? 0,
+					0
+				),
+				[]
+			);
+			parent.children?.push(symbol);
+			return;
+		}
+		if (node.type === "State" || node.type === "Data") {
+			const stateOrDataNode = node as
+				| { type: "State"; name: string }
+				| { type: "Data"; name: string };
+			const symbol = DocumentSymbol.create(
+				`${node.type} ${stateOrDataNode.name}`,
+				undefined,
+				SymbolKind.Variable,
+				Range.create(
+					node.startLine ?? 0,
+					0,
+					node.endLine ?? node.startLine ?? 0,
+					0
+				),
+				Range.create(
+					node.startLine ?? 0,
+					0,
+					node.endLine ?? node.startLine ?? 0,
+					0
+				),
+				[]
+			);
+			parent.children?.push(symbol);
+			return;
+		}
+		node.children?.forEach((child) => visit(child, parent));
+	}
+	ast.forEach((n) => visit(n, root));
+	return [root];
+}
+
+// Provide outline (Symbols) for .lnr files
+connection.onDocumentSymbol((params): DocumentSymbol[] => {
+	const doc = documents.get(params.textDocument.uri);
+	if (!doc) {
+		return [];
+	}
+	return generateDocumentSymbols(doc.getText(), params.textDocument.uri);
+});
 // Provide signature help based on parsed definitions
 connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp => {
 	const doc = documents.get(params.textDocument.uri);
@@ -525,9 +645,8 @@ function getAllComponentTags(): string[] {
 function getAllComponentSignatures(): SignatureInformation[] {
 	return Array.from(componentSignatures.values());
 }
-// Make the text document manager listen on the connection
-// for open, change and close text document events
-documents.listen(connection);
-
-// Listen on the connection
-connection.listen();
+// Start server only when run directly
+if (require.main === module) {
+	documents.listen(connection);
+	connection.listen();
+}

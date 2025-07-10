@@ -18,6 +18,16 @@
 	},
 	"devDependencies": {
 		"@types/vscode": "^1.75.1",
-		"@vscode/test-electron": "^2.3.9"
+		"@vscode/test-electron": "^2.3.9",
+		"mocha": "^10.0.0",
+		"chai": "^4.3.0",
+		"ts-node": "^10.0.0",
+		"@types/mocha": "^10.0.0",
+		"@types/chai": "^4.3.0",
+		"@types/glob": "^7.2.0"
+	},
+	"scripts": {
+		"compile": "tsc -b",
+		"test": "npm run compile && node ./out/test/runTest.js"
 	}
 }

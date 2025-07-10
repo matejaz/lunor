@@ -4,6 +4,11 @@ export interface AstNode {
 	value?: string | number | boolean | AstNode;
 	tag?: string;
 	attributes?: Record<string, string | AstNode>;
+	// optional position info for LSP/document symbols
+	startLine?: number;
+	startColumn?: number;
+	endLine?: number;
+	endColumn?: number;
 }
 
 export interface MarkdownNode extends AstNode {
@@ -59,9 +64,11 @@ export interface FetchNode extends AstNode {
 }
 
 export interface FunctionNode extends AstNode {
-	type: "JavaScript";
+	type: "Function";
 	signature: string;
 	body: string[];
+	startLine?: number;
+	endLine?: number;
 }
 
 export interface ExpressionNode extends AstNode {

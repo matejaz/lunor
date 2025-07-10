@@ -8,6 +8,6 @@
 		"sourceMap": true,
 		"composite": true
 	},
-	"include": ["src"],
+	"include": ["src", "src/test"],
 	"exclude": ["node_modules", ".vscode-test"]
 }
