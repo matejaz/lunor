@@ -10,7 +10,8 @@
 		"rootDir": ".",
 		"composite": true,
 		"esModuleInterop": true,
-		"allowSyntheticDefaultImports": true
+		"allowSyntheticDefaultImports": true,
+		"skipLibCheck": true
 	},
 	"include": ["src", "test"],
 	"exclude": ["node_modules", ".vscode-test"]
