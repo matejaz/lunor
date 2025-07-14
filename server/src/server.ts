@@ -411,6 +411,7 @@ connection.languages.diagnostics.on(async (params) => {
 });
 
 connection.onRequest("lunor/generateReact", async (params) => {
+	console.log("Lunor to React request received");
 	try {
 		// Parsiraj besedilo in ga pretvori v JSX
 		console.log("Pretvarjanje Lunor v React JSX LALALA ...");
