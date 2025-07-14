@@ -26,6 +26,7 @@ import {
 	DocumentSymbol,
 	SymbolKind,
 	Range,
+	Hover,
 } from "vscode-languageserver/node";
 import { URI } from "vscode-uri";
 import * as fs from "fs";
@@ -33,7 +34,13 @@ import * as path from "path";
 import * as glob from "fast-glob";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { generateReactCode, parseLunor } from "./parser/lunorParser";
-import type { AstNode, ForNode, IfNode } from "./parser/types";
+import type {
+	AstNode,
+	ForNode,
+	IfNode,
+	StateNode,
+	DataNode,
+} from "./parser/types";
 
 let workspaceRoot = ""; // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -419,6 +426,7 @@ connection.onRequest("lunor/generateReact", async (params) => {
 			params.text
 		);
 		console.log(ast);
+		console.log(imports);
 		// determine current file path from URI
 		const jsx = generateReactCode(ast, component, workspaceRoot, imports);
 		console.log("Neki");
@@ -620,22 +628,76 @@ connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
 	return item;
 });
 
-connection.onHover(({ textDocument }) => {
-	// Get the document
-	const doc = documents.get(textDocument.uri);
+// Provide hover information: show component and details of the AST node under cursor
+connection.onHover((params): Hover | undefined => {
+	const doc = documents.get(params.textDocument.uri);
 	if (!doc) {
 		return undefined;
 	}
-
-	// For now, let's return a static hover message.
-	// You can implement logic here to determine what to show based on the position.
-	// For example, inspect the word at the current position.
-	return {
-		contents: {
-			kind: "markdown",
-			value: "Hello from Lunor Language Server! You hovered here.",
-		},
-	};
+	const text = doc.getText();
+	const { ast, component } = parseLunor(text);
+	if (!component) {
+		return undefined;
+	}
+	// Find node at hover line
+	const line = params.position.line;
+	let target: AstNode | undefined;
+	function findNode(nodes: AstNode[]) {
+		for (const node of nodes) {
+			const start = node.startLine ?? 0;
+			const end = node.endLine ?? start;
+			if (line >= start && line <= end) {
+				target = node;
+				if (node.children) {
+					findNode(node.children);
+				}
+				break;
+			}
+		}
+	}
+	findNode(ast);
+	console.log("Hover target:", target);
+	// Build hover markdown
+	let md = `**Component**: ${component.name}`;
+	if (component.props?.length) {
+		md += `(${component.props
+			.map((p) => `${p.name}:${p.type}`)
+			.join(", ")})`;
+	}
+	if (target && target.type !== "Component") {
+		md += `\n\n---\n`;
+		switch (target.type) {
+			case "State": {
+				const s = target as StateNode;
+				md += `**State**: ${s.name} = ${s.value}`;
+				break;
+			}
+			case "Data": {
+				const d = target as DataNode;
+				md += `**Data**: ${d.name} = ${d.value}`;
+				break;
+			}
+			case "For": {
+				const f = target as ForNode;
+				md += `**For**: ${f.variable} in ${f.collection}`;
+				break;
+			}
+			case "If": {
+				const i = target as IfNode;
+				md += `**If**: ${i.condition}`;
+				break;
+			}
+			case "Function": {
+				// target is known to have a signature
+				const sig = (target as unknown as { signature?: string })
+					.signature;
+				md += `**Function**: ${sig ?? "<unknown signature>"}`;
+				break;
+			}
+			// add other node types as needed
+		}
+	}
+	return { contents: { kind: "markdown", value: md } };
 });
 
 function getAllComponentTags(): string[] {
