@@ -63,8 +63,8 @@ export interface FetchNode extends AstNode {
 	initVariable?: string;
 }
 
-export interface FunctionNode extends AstNode {
-	type: "Function";
+export interface JavaScriptNode extends AstNode {
+	type: "JavaScript";
 	signature: string;
 	body: string[];
 	startLine?: number;
