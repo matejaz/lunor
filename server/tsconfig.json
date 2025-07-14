@@ -7,7 +7,7 @@
 		"sourceMap": true,
 		"strict": true,
 		"outDir": "out",
-		"rootDir": ".",
+		"rootDir": "src",
 		"composite": true,
 		"esModuleInterop": true,
 		"allowSyntheticDefaultImports": true,
