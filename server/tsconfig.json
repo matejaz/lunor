@@ -7,11 +7,11 @@
 		"sourceMap": true,
 		"strict": true,
 		"outDir": "out",
-		"rootDir": ".",
+		"rootDir": "src",
 		"composite": true,
 		"esModuleInterop": true,
 		"allowSyntheticDefaultImports": true
 	},
-	"include": ["src", "test"],
+	"include": ["src", "test", "src/parser"],
 	"exclude": ["node_modules", ".vscode-test"]
 }

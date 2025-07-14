@@ -2,7 +2,7 @@
 /* eslint-env mocha */
 
 import { expect } from "chai";
-import { parseLunor } from "../src/parser/lunorParser";
+import { parseLunor } from "../parser/lunorParser";
 
 describe("lunorParser", () => {
 	it("should error on empty file", () => {
