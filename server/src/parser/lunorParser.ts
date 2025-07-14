@@ -894,6 +894,8 @@ function generateNode(
 	imports: string[] = [],
 	functions: string[] = []
 ): string {
+	console.log(`Generating node: ${node.type} at level ${level}`);
+	// handle special cases first
 	switch (node.type) {
 		case "Markdown":
 			return generateMarkdownNode(node as MarkdownNode, level, indentFn);
@@ -914,6 +916,14 @@ function generateNode(
 				indentFn,
 				functions
 			);
+		case "Function":
+			return generateFunctionNode(
+				node as JavaScriptNode,
+				level,
+				indentFn,
+				functions
+			);
+
 		case "State":
 			return generateStateNode(node as StateNode, declarations, imports);
 		case "For":

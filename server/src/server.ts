@@ -413,14 +413,14 @@ connection.languages.diagnostics.on(async (params) => {
 connection.onRequest("lunor/generateReact", async (params) => {
 	try {
 		// Parsiraj besedilo in ga pretvori v JSX
-		console.log("Pretvarjanje Lunor v React JSX ...");
+		console.log("Pretvarjanje Lunor v React JSX LALALA ...");
 		const { ast, diagnostics, component, imports } = parseLunor(
 			params.text
 		);
 		console.log(ast);
 		// determine current file path from URI
 		const jsx = generateReactCode(ast, component, workspaceRoot, imports);
-
+		console.log("Neki");
 		if (diagnostics.length > 0) {
 			connection.sendDiagnostics({
 				uri: params.textDocument.uri,
