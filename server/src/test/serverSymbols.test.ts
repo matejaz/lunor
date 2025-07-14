@@ -1,6 +1,6 @@
 /* eslint-env mocha */
 import { expect } from "chai";
-import { generateDocumentSymbols } from "../src/documentSymbols";
+import { generateDocumentSymbols } from "../documentSymbols";
 
 describe("Document Symbols", () => {
 	it("Returns no symbols for non-Lunor files", () => {
