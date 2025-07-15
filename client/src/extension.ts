@@ -278,7 +278,7 @@ export function activate(context: ExtensionContext) {
 
 			const doc = editor.document;
 			if (doc.languageId !== "lunor") {
-				window.showErrorMessage("Datoteka ni v lunor jeziku.");
+				window.showErrorMessage("File is not a Lunor file.");
 				return;
 			}
 			const text = doc.getText();
