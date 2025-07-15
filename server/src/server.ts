@@ -332,44 +332,6 @@ interface ExampleSettings {
 // Cache the settings of all open documents
 const documentSettings = new Map<string, Thenable<ExampleSettings>>();
 
-// // only for development
-// connection.onDidSaveTextDocument(async (params) => {
-// 	console.log("Tukaj");
-// 	console.log(`Document saved: ${params.textDocument.uri}`);
-// 	// Parse the document to update component definitions
-// 	try {
-// 		// Parsiraj besedilo in ga pretvori v JSX
-// 		console.log("Pretvarjanje Lunor v React JSX ...");
-// 		const { ast, diagnostics, component } = parseLunor(params.text ?? "");
-// 		// determine current file path from URI
-// 		const jsx = generateReactCode(ast, component, workspaceRoot);
-// 		console.log("Problems:", diagnostics);
-// 		console.log(ast);
-// 		console.log(component);
-// 		if (diagnostics.length > 0) {
-// 			connection.sendDiagnostics({
-// 				uri: params.textDocument.uri,
-// 				diagnostics: diagnostics.map(
-// 					(diag): Diagnostic => ({
-// 						severity: diag.severity as DiagnosticSeverity,
-// 						range: diag.range,
-// 						message: diag.message,
-// 						source: "lunor",
-// 						code: diag.code,
-// 					})
-// 				),
-// 			});
-// 		}
-
-// 		// Vrni JSX kodo kot rezultat
-// 		return jsx;
-// 	} catch (err) {
-// 		// Poskrbi za napake pri parserju
-// 		connection.console.error(`Napaka pri pretvorbi Lunor v React: ${err}`);
-// 		return "// Napaka pri pretvorbi";
-// 	}
-// });
-
 connection.onDidChangeConfiguration((_change) => {
 	if (hasConfigurationCapability) {
 		// Reset all cached document settings
@@ -418,18 +380,13 @@ connection.languages.diagnostics.on(async (params) => {
 });
 
 connection.onRequest("lunor/generateReact", async (params) => {
-	console.log("Lunor to React request received");
 	try {
 		// Parsiraj besedilo in ga pretvori v JSX
-		console.log("Pretvarjanje Lunor v React JSX LALALA ...");
 		const { ast, diagnostics, component, imports } = parseLunor(
 			params.text
 		);
-		console.log(ast);
-		console.log(imports);
 		// determine current file path from URI
 		const jsx = generateReactCode(ast, component, workspaceRoot, imports);
-		console.log("Neki");
 		if (diagnostics.length > 0) {
 			connection.sendDiagnostics({
 				uri: params.textDocument.uri,
